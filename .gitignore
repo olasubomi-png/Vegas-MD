@@ -6,3 +6,4 @@ auth_info_baileys/
 package-lock.json
 dist/
 build/
+.env
