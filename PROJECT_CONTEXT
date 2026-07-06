@@ -1,0 +1,25 @@
+# OLASUBOMI-MD Bot
+
+## Project
+WhatsApp Multi-Device Bot
+
+## Stack
+- Node.js
+- Baileys
+- PM2
+- GitHub Copilot CLI
+
+## Goals
+- Pair code authentication
+- 727+ commands
+- AI integration
+- Auto reconnect
+- Owner commands
+- Group moderation
+- Anti-delete
+- Sticker commands
+
+## Rules
+- Keep code modular.
+- Don't remove existing features unless requested.
+- Explain major code changes before applying them.
