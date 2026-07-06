@@ -1,129 +1,205 @@
-// Main & Utility Commands
+// Main & menu commands — paginated category menus
+const db = require('../lib/database');
 
 function getUptime() {
-  const uptime = Math.floor((Date.now() - (global.botStartTime || Date.now())) / 1000);
-  const days = Math.floor(uptime / 86400);
-  const hours = Math.floor((uptime % 86400) / 3600);
-  const minutes = Math.floor((uptime % 3600) / 60);
-  const seconds = uptime % 60;
-  const parts = [];
-  if (days) parts.push(`${days}d`);
-  if (hours) parts.push(`${hours}h`);
-  if (minutes) parts.push(`${minutes}m`);
-  parts.push(`${seconds}s`);
-  return parts.join(' ');
+  const s = Math.floor((Date.now() - (global.botStartTime || Date.now())) / 1000);
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600),
+        m = Math.floor((s % 3600) / 60), sec = s % 60;
+  return [d && `${d}d`, h && `${h}h`, m && `${m}m`, `${sec}s`].filter(Boolean).join(' ');
+}
+
+const CATEGORIES = {
+  main:     { emoji: '🏠', label: 'MAIN',      key: 'main' },
+  ai:       { emoji: '🤖', label: 'AI',        key: 'ai' },
+  download: { emoji: '⬇️', label: 'DOWNLOAD',  key: 'download' },
+  group:    { emoji: '👥', label: 'GROUP',      key: 'group' },
+  mod:      { emoji: '🛡️', label: 'MODERATION', key: 'mod' },
+  fun:      { emoji: '🎮', label: 'FUN',        key: 'fun' },
+  economy:  { emoji: '💰', label: 'ECONOMY',   key: 'economy' },
+  audio:    { emoji: '🎵', label: 'AUDIO',      key: 'audio' },
+  tools:    { emoji: '🔧', label: 'TOOLS',      key: 'tools' },
+  owner:    { emoji: '👑', label: 'OWNER',      key: 'owner' }
+};
+
+const CATEGORY_COMMANDS = {
+  main: [
+    '.menu [category] — Browse all commands',
+    '.help — Usage guide',
+    '.ping — Response time',
+    '.alive — Is bot online?',
+    '.uptime — Running time',
+    '.status — Full status',
+    '.profile — Your profile'
+  ],
+  ai: [
+    '.ai <q> — Ask AI (auto model)',
+    '.gpt <q> — ChatGPT (GPT-3.5)',
+    '.gpt4 <q> — GPT-4o',
+    '.claude <q> — Anthropic Claude',
+    '.gemini <q> — Google Gemini',
+    '.copilot <q> — GitHub Copilot',
+    '.chatgpt <q> — Alias for .gpt',
+    '.imagine <desc> — AI image description',
+    '.translate <lang>|<text>',
+    '.summarize <text>'
+  ],
+  download: [
+    '.tiktok <url> — Download TikTok',
+    '.fb <url> — Download Facebook',
+    '.igdl <url> — Download Instagram',
+    '.yt <url> — Download YouTube',
+    '.play <song> — Download music'
+  ],
+  group: [
+    '.promote @user — Make admin',
+    '.demote @user — Remove admin',
+    '.kick @user — Remove member',
+    '.mute — Admins-only chat',
+    '.unmute — Everyone can chat',
+    '.tagall [msg] — Tag all members',
+    '.ginfo — Group information',
+    '.groupsettings — View all toggles',
+    '.welcome — Toggle welcome msgs',
+    '.goodbye — Toggle goodbye msgs',
+    '.antilink — Toggle anti-link',
+    '.antidelete — Toggle anti-delete',
+    '.antispam — Toggle anti-spam',
+    '.antiviewonce — Toggle anti-VOC',
+    '.autoreact — Toggle auto-reactions'
+  ],
+  mod: [
+    '.warn @user [reason] — Add warning',
+    '.unwarn @user — Clear warnings',
+    '.warnings @user — Check warnings',
+    '.setmaxwarn <n> — Set warning limit',
+    '.setwelcome <msg> — Custom welcome',
+    '.setgoodbye <msg> — Custom goodbye'
+  ],
+  fun: [
+    '.joke — Random joke',
+    '.quote — Inspirational quote',
+    '.ship — Compatibility %',
+    '.dare — Get a dare',
+    '.truth — Truth question',
+    '.8ball <q> — Magic 8-ball',
+    '.roast — Get roasted',
+    '.compliment — Get a compliment'
+  ],
+  economy: [
+    '.balance — Check your coins',
+    '.daily — Claim daily reward (+500)',
+    '.work — Work for coins (3h cd)',
+    '.pay @user <amt> — Send coins',
+    '.leaderboard — Top 10 richest',
+    '.xpleaderboard — Top 10 XP',
+    '.profile — Full stats'
+  ],
+  audio: [
+    '.bass — Bass boost (reply to audio)',
+    '.deep — Deep voice effect',
+    '.fast — Speed up audio',
+    '.slow — Slow down audio',
+    '.reverse — Reverse audio',
+    '.robot — Robot voice',
+    '.chipmunk — Chipmunk voice',
+    '.smooth — Smooth effect'
+  ],
+  tools: [
+    '.font <text> — Fancy text styles',
+    '.sticker — Image → sticker',
+    '.enhance — Enhance image',
+    '.upscale — Upscale image',
+    '.removebg — Remove background',
+    '.blur — Blur image',
+    '.colorize — Colorize image'
+  ],
+  owner: [
+    '.dashboard — Full bot dashboard',
+    '.setmode public|private',
+    '.setprefix <symbol>',
+    '.ban @user — Ban from bot',
+    '.unban @user — Unban user',
+    '.broadcast <msg> — All groups',
+    '.autostatus — Toggle status view',
+    '.autostatusreact — Toggle status react',
+    '.addbalance @user <amt>',
+    '.listplugins — All loaded commands'
+  ]
+};
+
+function buildCategoryMenu(catKey) {
+  const cat = CATEGORIES[catKey];
+  if (!cat) return null;
+  const cmds = CATEGORY_COMMANDS[catKey] || [];
+  const lines = cmds.map(c => `┋ ▸ ${c}`).join('\n');
+  return `╭┈───〔 *${cat.emoji} ${cat.label}* 〕───⊷\n${lines}\n╰────────────────────⊷\n\n_Type .menu to see all categories_`;
+}
+
+function buildMainMenu(cfg) {
+  const catList = Object.values(CATEGORIES)
+    .map(c => `${c.emoji} *.menu ${c.key}* — ${c.label}`)
+    .join('\n');
+
+  const totalCmds = Object.values(CATEGORY_COMMANDS).flat().length;
+
+  return `╭┈───〔 *OLASUBOMI-MD* 〕───⊷
+├⬗ Owner  : ${cfg?.ownerName || 'Olasubomi'}
+├⬗ Prefix : ${cfg?.prefix || '.'}
+├⬗ Mode   : ${cfg?.mode || 'private'}
+├⬗ Version: 3.0.0 Beta
+├⬗ Uptime : ${getUptime()}
+├⬗ Commands: ${totalCmds}+
+╰────────────────────⊷
+
+*📂 Command Categories*
+
+${catList}
+
+> *© OLASUBOMI-MD v3.0.0 — Type .menu <category>*`;
 }
 
 const mainCommands = {
   menu: {
-    desc: 'Show all commands',
+    desc: 'Show command menu or a category',
     exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
-      const cfg = botConfig || global.botConfig || {};
-      const menu = `╭┈───〔 *OLASUBOMI-MD* 〕───⊷
-├⬗ Owner  : ${cfg.ownerName || 'Olasubomi'}
-├⬗ Prefix : ${cfg.prefix || '.'}
-├⬗ Mode   : ${cfg.mode || 'private'}
-├⬗ Version: ${cfg.version || '3.0.0'} ${cfg.beta || 'Beta'}
-├⬗ Uptime : ${getUptime()}
-╰────────────────────⊷
+      const cfg = botConfig || global.botConfig;
+      const catKey = args[0]?.toLowerCase();
 
-*『 MAIN 』*
-┋ ▸ .menu — Show this menu
-┋ ▸ .help — Usage guide
-┋ ▸ .ping — Response time
-┋ ▸ .alive — Is bot online?
-┋ ▸ .uptime — How long running
-┋ ▸ .owner — Owner info
-┋ ▸ .status — Full bot status
-┋ ▸ .settings — Bot settings
+      if (catKey && CATEGORIES[catKey]) {
+        const page = buildCategoryMenu(catKey);
+        return sock.sendMessage(jid, { text: page });
+      }
 
-*『 AI 』*
-┋ ▸ .ai <question> — Ask AI (alias: .gpt)
-┋ ▸ .gpt <question> — Ask ChatGPT
-┋ ▸ .gemini <question> — Google Gemini
-┋ ▸ .claude <question> — Claude AI
-┋ ▸ .copilot <question> — GitHub Copilot
-┋ ▸ .chatgpt <question> — ChatGPT
-┋ ▸ .imagine <prompt> — AI image description
+      if (catKey && !CATEGORIES[catKey]) {
+        return sock.sendMessage(jid, {
+          text: `❌ Unknown category: *${catKey}*\n\nAvailable: ${Object.keys(CATEGORIES).join(', ')}`
+        });
+      }
 
-*『 DOWNLOAD 』*
-┋ ▸ .tiktok <url> — Download TikTok
-┋ ▸ .fb <url> — Download Facebook
-┋ ▸ .igdl <url> — Download Instagram
-┋ ▸ .yt <url> — Download YouTube
-┋ ▸ .play <song> — Download music
-
-*『 FUN 』*
-┋ ▸ .joke — Random joke
-┋ ▸ .quote — Inspirational quote
-┋ ▸ .ship — Compatibility %
-┋ ▸ .dare — Truth or dare
-┋ ▸ .truth — Truth question
-┋ ▸ .8ball <q> — Magic 8-ball
-┋ ▸ .roast — Get roasted
-┋ ▸ .compliment — Get a compliment
-
-*『 GROUP 』*
-┋ ▸ .promote @user — Make admin
-┋ ▸ .demote @user — Remove admin
-┋ ▸ .kick @user — Remove member
-┋ ▸ .mute — Mute group chat
-┋ ▸ .unmute — Unmute group chat
-┋ ▸ .tagall [msg] — Tag everyone
-┋ ▸ .ginfo — Group info
-
-*『 AUDIO 』*
-┋ ▸ .bass — Bass boost audio
-┋ ▸ .deep — Deep voice effect
-┋ ▸ .fast — Speed up audio
-┋ ▸ .slow — Slow down audio
-┋ ▸ .reverse — Reverse audio
-┋ ▸ .robot — Robot voice
-┋ ▸ .chipmunk — Chipmunk voice
-┋ ▸ .smooth — Smooth effect
-
-*『 TOOLS 』*
-┋ ▸ .font <text> — Fancy text styles
-┋ ▸ .sticker — Image → sticker
-┋ ▸ .enhance — Enhance image
-┋ ▸ .upscale — Upscale image
-┋ ▸ .removebg — Remove background
-┋ ▸ .blur — Blur image
-┋ ▸ .colorize — Colorize image
-
-*『 SETTINGS 』*
-┋ ▸ .settings — Bot configuration
-┋ ▸ .prefix — Current prefix
-┋ ▸ .privacy — Privacy mode
-
-> *© OLASUBOMI-MD v3.0.0 Beta*`;
-
-      await sock.sendMessage(jid, { text: menu });
+      await sock.sendMessage(jid, { text: buildMainMenu(cfg) });
     }
   },
 
   help: {
-    desc: 'Show help guide',
-    exec: async (args, sock, jid) => {
-      const help = `🤖 *OLASUBOMI-MD Help*
-
-Use the dot (.) prefix before every command.
-
-*Examples:*
-• .menu — See all commands
-• .gpt What is the capital of France?
-• .tiktok https://vm.tiktok.com/xxx
-• .joke
-• .promote @user (in a group)
-
-*Tips:*
-• All AI commands require a question after the command
-• Download commands need a valid URL
-• Group commands only work inside groups
-• For audio/image tools, reply to the media first
-
-Type *.menu* to see the full command list.`;
-      await sock.sendMessage(jid, { text: help });
+    desc: 'Usage guide',
+    exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
+      const prefix = botConfig?.prefix || global.botConfig?.prefix || '.';
+      await sock.sendMessage(jid, {
+        text: `🤖 *OLASUBOMI-MD Help*\n\n` +
+          `Use *${prefix}* before every command.\n\n` +
+          `*Quick examples:*\n` +
+          `• ${prefix}menu — Browse all categories\n` +
+          `• ${prefix}menu ai — All AI commands\n` +
+          `• ${prefix}gpt What is JavaScript?\n` +
+          `• ${prefix}tiktok https://vm.tiktok.com/xxx\n` +
+          `• ${prefix}daily — Claim 500 coins\n` +
+          `• ${prefix}warn @user — Warn in group\n` +
+          `• ${prefix}antilink — Toggle anti-link (admin)\n\n` +
+          `*Tips:*\n` +
+          `• AI commands fall back to free tier if no API key is set\n` +
+          `• Group protection features are per-group and persist after restart\n` +
+          `• Set API keys as Replit Secrets for real AI responses`
+      });
     }
   },
 
@@ -132,34 +208,23 @@ Type *.menu* to see the full command list.`;
     exec: async (args, sock, jid) => {
       const start = Date.now();
       await sock.sendMessage(jid, { text: '🏓 Pinging...' });
-      const ms = Date.now() - start;
-      await sock.sendMessage(jid, { text: `🏓 *Pong!*\n⚡ Response time: *${ms}ms*` });
+      await sock.sendMessage(jid, { text: `🏓 *Pong!* ⚡ ${Date.now() - start}ms` });
     }
   },
 
   alive: {
-    desc: 'Check if bot is alive',
+    desc: 'Check if bot is running',
     exec: async (args, sock, jid) => {
       await sock.sendMessage(jid, {
-        text: `✅ *OLASUBOMI-MD is Alive!*\n\n📅 Time   : ${new Date().toLocaleString()}\n⏱️ Uptime : ${getUptime()}\n🔌 Status : Connected\n🤖 Version: 3.0.0 Beta`
+        text: `✅ *OLASUBOMI-MD is Alive!*\n\n📅 ${new Date().toLocaleString()}\n⏱️ Uptime: ${getUptime()}\n🔌 Status: Connected`
       });
     }
   },
 
   uptime: {
-    desc: 'Show how long bot has been running',
+    desc: 'How long the bot has been running',
     exec: async (args, sock, jid) => {
-      await sock.sendMessage(jid, { text: `⏱️ *Bot Uptime*\n\n${getUptime()}` });
-    }
-  },
-
-  owner: {
-    desc: 'Get owner information',
-    exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
-      const cfg = botConfig || global.botConfig || {};
-      await sock.sendMessage(jid, {
-        text: `👤 *Owner Information*\n\nName   : ${cfg.ownerName || 'Olasubomi'}\nNumber : ${cfg.ownerNumber || 'Not set'}\nBot    : OLASUBOMI-MD v3.0.0\nPrefix : ${cfg.prefix || '.'}`
-      });
+      await sock.sendMessage(jid, { text: `⏱️ *Uptime:* ${getUptime()}` });
     }
   },
 
@@ -167,9 +232,13 @@ Type *.menu* to see the full command list.`;
     desc: 'Full bot status',
     exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
       const cfg = botConfig || global.botConfig || {};
-      const memUsed = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
+      const stats = db.stats();
+      const mem = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
       await sock.sendMessage(jid, {
-        text: `🟢 *OLASUBOMI-MD Status*\n\n✅ Status   : Online\n⏱️ Uptime   : ${getUptime()}\n💾 Memory   : ${memUsed} MB\n📊 Commands : ${Object.keys(require('./index')).length}\n🔌 Mode     : ${cfg.mode || 'private'}\n📝 Version  : 3.0.0 Beta\n👤 Owner    : ${cfg.ownerName || 'Olasubomi'}`
+        text: `🟢 *OLASUBOMI-MD Status*\n\n` +
+          `✅ Online\n⏱️ Uptime  : ${getUptime()}\n💾 Memory  : ${mem} MB\n` +
+          `👤 Mode    : ${cfg.mode || 'private'}\n📊 Commands: ${Object.keys(require('./index')).length}\n` +
+          `🧑 Users   : ${stats.users}\n👥 Groups  : ${stats.groups}\n🚫 Banned  : ${stats.banned}`
       });
     }
   }

@@ -1,0 +1,35 @@
+{
+  "users": {
+    "2341234567890": {
+      "id": "2341234567890",
+      "name": "",
+      "balance": 500,
+      "xp": 50,
+      "level": 1,
+      "lastDaily": null,
+      "lastWork": null,
+      "warnings": 0,
+      "banned": false,
+      "createdAt": "2026-07-06T19:00:18.601Z"
+    }
+  },
+  "groups": {
+    "120363000000000001": {
+      "id": "120363000000000001",
+      "welcome": false,
+      "goodbye": false,
+      "welcomeMsg": "👋 Welcome @user to *@group*! You are member #@count.",
+      "goodbyeMsg": "👋 *@user* has left the group.",
+      "antiLink": true,
+      "antiDelete": false,
+      "antiSpam": false,
+      "antiViewOnce": false,
+      "autoReact": false,
+      "autoStatus": false,
+      "maxWarnings": 3,
+      "muteLink": false
+    }
+  },
+  "settings": {},
+  "bannedUsers": []
+}
