@@ -462,16 +462,21 @@ async function connect({ freshLogin = false } = {}) {
   }
   isConnecting = true;
 
-  if (freshLogin || !pairingCodeRequested) {
-    // First-ever connect, or deliberate fresh-login after a post-link logout.
-    // A new pairing code will be requested on the first QR event.
+  if (freshLogin) {
+    // Deliberate fresh-login only (e.g. post-link 401 logout).
+    // Reset so a new pairing code will be requested on the first QR event.
+    console.log('[WA] Resetting pairingCodeRequested because freshLogin=true');
     pairingCodeRequested = false;
     console.log(`[WA] connect() — pairingCodeRequested = false (freshLogin: ${freshLogin})`);
   } else {
-    // Silent reconnect during an active pairing attempt (e.g. 408/401 before
-    // the user has finished linking).  Keep pairingCodeRequested=true so the
-    // QR event on the new socket is silently ignored — no second code issued.
-    console.log('[WA] connect() — preserving pairingCodeRequested=true (silent reconnect during pairing)');
+    // Silent reconnect (during pairing or normal operation) — never touch
+    // pairingCodeRequested here.  If it is already true the QR event on the
+    // new socket will be silently ignored and the existing code stays valid.
+    // If it is already false a new code will be requested on the next QR event.
+    console.log(
+      `[WA] connect() — preserving pairingCodeRequested=${pairingCodeRequested}` +
+      ` (freshLogin: false)`
+    );
   }
 
   if (currentSock) {
