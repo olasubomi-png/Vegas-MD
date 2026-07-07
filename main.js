@@ -233,31 +233,37 @@ function attachHandlers(sock, saveCreds) {
         }
 
         // ── NOT YET REGISTERED (pairing in progress) ────────────────────────
-        // Do not reconnect for ANY reason while waiting for the user to link.
         //
-        // Why: reconnecting creates a new socket, which resets
-        //   pairingCodeRequested=false and fires requestPairingCode() again —
-        //   immediately invalidating the code the user is currently entering.
+        // We MUST reconnect — WhatsApp delivers the identity keys over the
+        // active WebSocket when the user enters the code.  Without a live
+        // socket the handshake cannot complete regardless of how long we wait.
         //
-        // Why not wipe auth on 401 here: a 401 during the pairing handshake
-        //   is a transient WA response, not a "device logged out" signal.
-        //   Wiping auth_info_baileys/ destroys the partial pairing state and
-        //   makes linking impossible for that session.
+        // We must NOT wipe auth_info_baileys/ — it holds the identity keys WA
+        // uses to recognise this bot instance.  Wiping it destroys the partial
+        // pairing state and makes linking impossible for that session.
         //
-        // Recovery: the user must restart the bot manually to get a new code.
+        // We must NOT generate a new pairing code — connect() is called with
+        // freshLogin=false, so pairingCodeRequested stays true and the QR event
+        // on the new socket is silently ignored.  The existing code stays valid.
+        //
+        // Net result: one code, silent socket reconnect, process never exits,
+        // PM2 never sees a crash restart.
         if (!registered) {
           console.log(
-            `[WA] ⚠  Connection dropped during pairing (${reasonName}). ` +
-            'Not reconnecting — pairing code is still valid. ' +
-            'Restart the bot manually if you need a fresh code.'
+            `[WA] ⚠  Connection dropped during pairing — ${reasonName}(${statusCode}).` +
+            ` | pairingCodeRequested: ${pairingCodeRequested}` +
+            ` | registered: ${registered}`
           );
+          console.log('[WA]    Reconnecting silently in 5s (preserving pairing state — no new code).');
+          console.log('[WA]    auth_info_baileys/ NOT wiped — partial pairing state preserved.');
+          scheduleReconnect(5_000);   // freshLogin defaults to false → pairingCodeRequested preserved
           return;
         }
 
         // ── REGISTERED — normal post-link reconnect logic ───────────────────
 
-        // 401 loggedOut: device was removed from WhatsApp or session was revoked
-        // on an already-linked account. Safe to wipe stale credentials and start
+        // 401 loggedOut: device was removed or session revoked on an already-
+        // linked account.  Now it IS safe to wipe stale credentials and start
         // a fresh pairing-code flow.
         if (statusCode === DisconnectReason.loggedOut) {
           console.log('[WA] Logged out (401) after successful registration — clearing stale session...');
@@ -267,13 +273,13 @@ function attachHandlers(sock, saveCreds) {
           } catch (e) {
             console.error('[WA] Could not clear auth_info_baileys/:', e.message);
           }
-          console.log('[WA] Reconnecting in 3s to start a fresh pairing-code flow...');
-          scheduleReconnect(3_000);
+          console.log('[WA] Reconnecting in 3s with a fresh login (new pairing code)...');
+          scheduleReconnect(3_000, { freshLogin: true });
           return;
         }
 
-        // All other close reasons (408 connectionLost, timedOut, restart, etc.)
-        // — standard backoff reconnect.
+        // All other close reasons (timedOut, restart, etc.) while registered
+        // — standard backoff reconnect, preserve nothing special.
         console.log(`[WA] Reconnecting in 5s...`);
         scheduleReconnect(5_000);
       }
@@ -416,16 +422,22 @@ function attachHandlers(sock, saveCreds) {
 
 // ─────────────────────────────────────────────────────────
 // scheduleReconnect — always via setTimeout, never from
-// inside an event handler, to prevent stacked async calls
+// inside an event handler, to prevent stacked async calls.
+//
+// opts.freshLogin = true  → connect() resets all pairing state
+//                           (use only after a confirmed post-link logout)
+// opts.freshLogin = false → connect() preserves pairingCodeRequested
+//                           so no second pairing code is generated when
+//                           we silently reconnect during an active pairing
 // ─────────────────────────────────────────────────────────
-function scheduleReconnect(delayMs) {
+function scheduleReconnect(delayMs, opts = {}) {
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
-    connect();
+    connect(opts);
   }, delayMs);
 }
 
@@ -438,16 +450,29 @@ function scheduleReconnect(delayMs) {
 //   5. Attach handlers
 //   6. Release mutex
 // ─────────────────────────────────────────────────────────
-async function connect() {
+// opts.freshLogin = true  → used after a confirmed post-link 401 logout;
+//                           resets all pairing state so a new code is requested.
+// opts.freshLogin = false → silent reconnect during an active pairing attempt;
+//                           pairingCodeRequested is preserved so the existing
+//                           code stays valid and no second code is generated.
+async function connect({ freshLogin = false } = {}) {
   if (isConnecting) {
     console.log('[WA] connect() already in progress — skipping.');
     return;
   }
   isConnecting = true;
-  // Reset per-socket pairing flag so every fresh connect() gets
-  // exactly one pairing-code attempt if creds are not registered.
-  pairingCodeRequested = false;
-  console.log('[WA] connect() starting — pairingCodeRequested reset to false');
+
+  if (freshLogin || !pairingCodeRequested) {
+    // First-ever connect, or deliberate fresh-login after a post-link logout.
+    // A new pairing code will be requested on the first QR event.
+    pairingCodeRequested = false;
+    console.log(`[WA] connect() — pairingCodeRequested = false (freshLogin: ${freshLogin})`);
+  } else {
+    // Silent reconnect during an active pairing attempt (e.g. 408/401 before
+    // the user has finished linking).  Keep pairingCodeRequested=true so the
+    // QR event on the new socket is silently ignored — no second code issued.
+    console.log('[WA] connect() — preserving pairingCodeRequested=true (silent reconnect during pairing)');
+  }
 
   if (currentSock) {
     console.log('[WA] Destroying previous socket...');
