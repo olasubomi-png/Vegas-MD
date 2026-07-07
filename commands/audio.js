@@ -1,38 +1,43 @@
-// Audio Effect Commands
-// These commands require the user to reply to an audio message.
-// Full ffmpeg-based processing can be added when audio files are accessible.
+'use strict';
+// commands/audio.js — Audio effect commands (require ffmpeg for full processing)
 
-function audioStub(effect, emoji) {
+function audioStub(cmdName, label, emoji) {
   return {
-    desc: `Apply ${effect} effect to audio`,
+    category:    'audio',
+    desc:        `Apply ${label} effect to a voice note or audio`,
+    usage:       `.${cmdName} (reply to audio)`,
+    aliases:     [],
+    permissions: 'all',
+    examples:    [`.${cmdName} (reply to a voice note)`],
     exec: async (args, sock, jid, isGroup, sender, message) => {
-      // Check if replying to an audio/voice message
-      const quoted = message.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+      const quoted  = message.message?.extendedTextMessage?.contextInfo?.quotedMessage;
       const hasAudio = quoted?.audioMessage || quoted?.videoMessage;
-
       if (!hasAudio) {
-        return await sock.sendMessage(jid, {
-          text: `${emoji} *${effect} Effect*\n\nReply to a voice note or audio file with *.${effect.toLowerCase()}* to apply this effect.\n\n*Example:*\n1. Send or find a voice note\n2. Reply to it with .${effect.toLowerCase()}`
+        return sock.sendMessage(jid, {
+          text:
+            `${emoji} *${label} Effect*\n\n` +
+            `Reply to a *voice note* or *audio file* with *.${cmdName}*.\n\n` +
+            `*Steps:*\n` +
+            `1️⃣ Send or find a voice note\n` +
+            `2️⃣ Reply to it with *.${cmdName}*`
         });
       }
-
-      // Audio message found — acknowledge (full processing requires ffmpeg)
       await sock.sendMessage(jid, {
-        text: `${emoji} *${effect} Effect*\n\n⏳ Processing audio...\n\n_Note: Full audio processing requires ffmpeg to be configured on the server._`
+        text: `${emoji} *${label} Effect*\n\n⏳ Processing audio...\n\n_Full audio processing requires ffmpeg. Coming soon._`
       });
     }
   };
 }
 
 const audioCommands = {
-  bass:     audioStub('Bass Boost', '🎵'),
-  deep:     audioStub('Deep Voice', '🎤'),
-  fast:     audioStub('Speed Up', '⏩'),
-  slow:     audioStub('Slow Down', '⏪'),
-  reverse:  audioStub('Reverse', '🔄'),
-  robot:    audioStub('Robot Voice', '🤖'),
-  chipmunk: audioStub('Chipmunk', '🐿️'),
-  smooth:   audioStub('Smooth', '🎶')
+  bass:     audioStub('bass',     'Bass Boost',  '🎵'),
+  deep:     audioStub('deep',     'Deep Voice',  '🎤'),
+  fast:     audioStub('fast',     'Speed Up',    '⏩'),
+  slow:     audioStub('slow',     'Slow Down',   '⏪'),
+  reverse:  audioStub('reverse',  'Reverse',     '🔄'),
+  robot:    audioStub('robot',    'Robot Voice', '🤖'),
+  chipmunk: audioStub('chipmunk', 'Chipmunk',    '🐿️'),
+  smooth:   audioStub('smooth',   'Smooth',      '🎶'),
 };
 
 module.exports = audioCommands;

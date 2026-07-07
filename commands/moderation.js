@@ -1,99 +1,87 @@
-// Moderation Commands — warn, unwarn, ban in group context
+'use strict';
+// commands/moderation.js — Warn, ban, welcome/goodbye configuration
 const db = require('../lib/database');
-const { getMentionedJid, isGroupAdmin, normalizeJid, resolveIsOwner } = require('../lib/helpers');
+const { getMentionedJid, isGroupAdmin, resolveIsOwner } = require('../lib/helpers');
 
 async function requireAdmin(sock, jid, isGroup, sender, message, botConfig) {
-  if (!isGroup) {
-    await sock.sendMessage(jid, { text: '❌ This command only works in groups.' });
-    return false;
-  }
-  // Owner (fromMe or matching OWNER_NUMBER) bypasses admin requirement
+  if (!isGroup) { await sock.sendMessage(jid, { text: '❌ This command only works in groups.' }); return false; }
   if (resolveIsOwner(message, sender, botConfig)) return true;
-  const admin = await isGroupAdmin(sock, jid, sender);
-  if (!admin) {
-    await sock.sendMessage(jid, { text: '❌ Only group admins can use this command.' });
-    return false;
+  if (!await isGroupAdmin(sock, jid, sender)) {
+    await sock.sendMessage(jid, { text: '❌ Only group admins can use this command.' }); return false;
   }
   return true;
 }
 
 const moderationCommands = {
   warn: {
-    desc: 'Warn a member',
+    category: 'moderation', desc: 'Issue a warning to a member',
+    usage: '.warn @user [reason]', aliases: [], permissions: 'admin',
+    examples: ['.warn @user Spamming', '.warn @user'],
     exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
       if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
-
       const target = getMentionedJid(message);
       if (!target) return sock.sendMessage(jid, { text: '❌ Usage: .warn @user [reason]' });
-
-      const reason = args.filter(a => !a.startsWith('@')).join(' ') || 'No reason given';
-      const count = db.addWarning(target);
+      const reason   = args.filter(a => !a.startsWith('@')).join(' ') || 'No reason given';
+      const count    = db.addWarning(target);
       const settings = db.getGroup(jid);
-      const maxWarn = settings.maxWarnings || 3;
-      const targetName = target.split('@')[0];
-
+      const maxWarn  = settings.maxWarnings || 3;
       let extra = '';
       if (count >= maxWarn) {
-        try {
-          await sock.groupParticipantsUpdate(jid, [target], 'remove');
-          extra = `\n\n🚫 Reached ${maxWarn} warnings — *kicked from group*.`;
-          db.clearWarnings(target);
-        } catch (err) {
-          extra = `\n\n⚠️ Could not kick: ${err.message}`;
-        }
+        try { await sock.groupParticipantsUpdate(jid, [target], 'remove'); extra = `\n\n🚫 Reached ${maxWarn} warnings — *kicked*.`; db.clearWarnings(target); }
+        catch (err) { extra = `\n\n⚠️ Could not kick: ${err.message}`; }
       }
-
       await sock.sendMessage(jid, {
-        text: `⚠️ *Warning Issued*\n\n👤 User   : @${targetName}\n📝 Reason : ${reason}\n🔢 Count  : ${count}/${maxWarn}${extra}`,
+        text: `⚠️ *Warning Issued*\n\n👤 User   : @${target.split('@')[0]}\n📝 Reason : ${reason}\n🔢 Count  : ${count}/${maxWarn}${extra}`,
         mentions: [target]
       });
     }
   },
 
   unwarn: {
-    desc: 'Remove a warning from a member',
+    category: 'moderation', desc: 'Clear all warnings for a member',
+    usage: '.unwarn @user', aliases: [], permissions: 'admin',
+    examples: ['.unwarn @user'],
     exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
       if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
-
       const target = getMentionedJid(message);
       if (!target) return sock.sendMessage(jid, { text: '❌ Usage: .unwarn @user' });
-
       db.clearWarnings(target);
-      await sock.sendMessage(jid, {
-        text: `✅ All warnings cleared for @${target.split('@')[0]}`,
-        mentions: [target]
-      });
+      await sock.sendMessage(jid, { text: `✅ All warnings cleared for @${target.split('@')[0]}`, mentions: [target] });
     }
   },
 
   warnings: {
-    desc: 'Check warnings for a user',
+    category: 'moderation', desc: 'Check warning count for a user',
+    usage: '.warnings [@user]', aliases: ['checkwarn'], permissions: 'all',
+    examples: ['.warnings @user', '.warnings'],
     exec: async (args, sock, jid, isGroup, sender, message) => {
       const target = getMentionedJid(message) || sender;
-      const user = db.getUser(target);
-      const settings = isGroup ? db.getGroup(jid) : { maxWarnings: 3 };
+      const user   = db.getUser(target);
+      const max    = isGroup ? (db.getGroup(jid).maxWarnings || 3) : 3;
       await sock.sendMessage(jid, {
-        text: `⚠️ *Warnings*\n\n👤 User   : @${target.split('@')[0]}\n🔢 Count  : ${user.warnings}/${settings.maxWarnings || 3}`,
+        text: `⚠️ *Warnings*\n\n👤 User   : @${target.split('@')[0]}\n🔢 Count  : ${user.warnings}/${max}`,
         mentions: [target]
       });
     }
   },
 
   setmaxwarn: {
-    desc: 'Set max warnings before auto-kick',
+    category: 'moderation', desc: 'Set the maximum warnings before auto-kick',
+    usage: '.setmaxwarn <1–20>', aliases: [], permissions: 'admin',
+    examples: ['.setmaxwarn 3', '.setmaxwarn 5'],
     exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
       if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
       const max = parseInt(args[0], 10);
-      if (!max || max < 1 || max > 20) {
-        return sock.sendMessage(jid, { text: '❌ Usage: .setmaxwarn <1–20>' });
-      }
+      if (!max || max < 1 || max > 20) return sock.sendMessage(jid, { text: '❌ Usage: .setmaxwarn <1–20>' });
       db.updateGroup(jid, { maxWarnings: max });
       await sock.sendMessage(jid, { text: `✅ Max warnings set to *${max}*` });
     }
   },
 
   setwelcome: {
-    desc: 'Set custom welcome message (@user, @group, @count)',
+    category: 'moderation', desc: 'Set a custom welcome message (@user, @group, @count)',
+    usage: '.setwelcome <message>', aliases: [], permissions: 'admin',
+    examples: ['.setwelcome Welcome @user to @group! We now have @count members.'],
     exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
       if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
       const msg = args.join(' ').trim();
@@ -104,7 +92,9 @@ const moderationCommands = {
   },
 
   setgoodbye: {
-    desc: 'Set custom goodbye message (@user)',
+    category: 'moderation', desc: 'Set a custom goodbye message (@user)',
+    usage: '.setgoodbye <message>', aliases: [], permissions: 'admin',
+    examples: ['.setgoodbye Goodbye @user, we\'ll miss you!'],
     exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
       if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
       const msg = args.join(' ').trim();

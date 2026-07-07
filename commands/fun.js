@@ -1,72 +1,58 @@
-// Fun Commands
+'use strict';
+// commands/fun.js — Fun commands
 
 const jokes = [
   '😂 Why did the bot go to therapy? It had too many unresolved promises!',
   '🤖 Why don\'t bots ever get lost? They always follow the right path!',
-  '😆 Why did the programmer quit his job? He didn\'t get arrays!',
-  '🎭 What\'s a programmer\'s favorite hangout place? Foo Bar!',
-  '😂 How many programmers does it take to change a light bulb? None — that\'s a hardware problem.',
-  '🤣 I told my wife she was drawing her eyebrows too high. She looked surprised.',
-  '😄 Why do Java developers wear glasses? Because they don\'t C#!',
-  '😂 A SQL query walks into a bar, walks up to two tables and asks: "Can I join you?"',
-  '🤖 Why was the JavaScript developer sad? Because he didn\'t know how to null his feelings.',
+  '😆 Why did the programmer quit? He didn\'t get arrays!',
+  '🎭 What\'s a programmer\'s favorite hangout? Foo Bar!',
+  '😂 How many programmers to change a light bulb? None — that\'s a hardware problem.',
+  '🤣 I told my wife she drew her eyebrows too high. She looked surprised.',
+  '😄 Why do Java devs wear glasses? Because they don\'t C#!',
+  '😂 A SQL query walks into a bar and asks two tables: "Can I join you?"',
+  '🤖 Why was the JS dev sad? He didn\'t know how to null his feelings.',
   '😆 What do you call a sleeping dinosaur? A dino-snore!'
 ];
 
 const quotes = [
   '💭 "Code is like humor. When you have to explain it, it\'s bad." — Cory House',
   '💭 "First, solve the problem. Then, write the code." — John Johnson',
-  '💭 "Any fool can write code that a computer can understand. Good programmers write code humans can understand." — Martin Fowler',
-  '💭 "The best error message is the one that never shows up." — Thomas Fuchs',
+  '💭 "Any fool can write code a computer understands. Good programmers write code humans understand." — Martin Fowler',
   '💭 "Simplicity is the soul of efficiency." — Austin Freeman',
   '💭 "Make it work, make it right, make it fast." — Kent Beck',
   '💭 "Talk is cheap. Show me the code." — Linus Torvalds',
-  '💭 "Your most unhappy customers are your greatest source of learning." — Bill Gates',
   '💭 "It\'s not a bug — it\'s an undocumented feature." — Anonymous',
-  '💭 "Without requirements or design, programming is the art of adding bugs to an empty text file." — Louis Srygley'
+  '💭 "The best error message is the one that never shows up." — Thomas Fuchs'
 ];
 
 const dares = [
   '😈 Dare: Send a voice note singing your favorite song!',
   '😈 Dare: Change your display name to something funny for 1 hour!',
   '😈 Dare: Send a compliment to every member in this chat!',
-  '😈 Dare: Share the most embarrassing photo on your phone!',
   '😈 Dare: Type the next 10 messages using only emojis!',
   '😈 Dare: Send a message in a foreign language!',
-  '😈 Dare: Let someone else pick your profile picture for a day!',
-  '😈 Dare: Tell a joke right now, no matter how bad it is!'
+  '😈 Dare: Tell a joke right now, no matter how bad!',
+  '😈 Dare: Share the most embarrassing photo in your gallery!',
+  '😈 Dare: Let someone else pick your profile picture for a day!'
 ];
 
 const truths = [
   '🎭 Truth: What\'s your most embarrassing moment?',
   '🎭 Truth: What\'s the last lie you told?',
   '🎭 Truth: What\'s your biggest fear?',
-  '🎭 Truth: What\'s your most used app on your phone?',
+  '🎭 Truth: What\'s your most used app?',
   '🎭 Truth: Have you ever pretended to be offline to avoid someone?',
   '🎭 Truth: What\'s something you\'ve never told anyone?',
   '🎭 Truth: What\'s your dream job?',
   '🎭 Truth: Who was your first celebrity crush?'
 ];
 
-const eightBallResponses = [
-  '🎱 It is certain.',
-  '🎱 Without a doubt.',
-  '🎱 Yes, definitely.',
-  '🎱 You may rely on it.',
-  '🎱 As I see it, yes.',
-  '🎱 Most likely.',
-  '🎱 Outlook good.',
-  '🎱 Yes.',
-  '🎱 Signs point to yes.',
-  '🎱 Reply hazy, try again.',
-  '🎱 Ask again later.',
-  '🎱 Better not tell you now.',
-  '🎱 Cannot predict now.',
-  '🎱 Concentrate and ask again.',
-  '🎱 Don\'t count on it.',
-  '🎱 My reply is no.',
-  '🎱 My sources say no.',
-  '🎱 Outlook not so good.',
+const eightBall = [
+  '🎱 It is certain.', '🎱 Without a doubt.', '🎱 Yes, definitely.',
+  '🎱 You may rely on it.', '🎱 As I see it, yes.', '🎱 Most likely.',
+  '🎱 Outlook good.', '🎱 Signs point to yes.', '🎱 Reply hazy, try again.',
+  '🎱 Ask again later.', '🎱 Better not tell you now.', '🎱 Cannot predict now.',
+  '🎱 Don\'t count on it.', '🎱 My reply is no.', '🎱 Outlook not so good.',
   '🎱 Very doubtful.'
 ];
 
@@ -74,88 +60,151 @@ const roasts = [
   '🔥 You\'re the reason they put instructions on shampoo bottles.',
   '🔥 I\'d agree with you, but then we\'d both be wrong.',
   '🔥 You\'re like a software update — whenever I see you I think "not now."',
-  '🔥 You bring everyone so much joy… when you leave the room.',
-  '🔥 I\'ve seen better arguments in a Terms & Conditions page.',
+  '🔥 You bring everyone joy… when you leave the room.',
   '🔥 You\'re proof that evolution can go in reverse.',
-  '🔥 If brains were petrol, you wouldn\'t have enough to power an ant\'s motorcycle.',
-  '🔥 You must have been born on a highway — that\'s where most accidents happen.'
+  '🔥 If brains were petrol, you couldn\'t power an ant\'s motorcycle.'
 ];
 
 const compliments = [
   '💖 You\'re the reason bots were invented — to tell you how amazing you are!',
   '💖 Your kindness is like a good API — reliable and always returns something great!',
-  '💖 You light up every room you walk into, even this chat!',
-  '💖 You\'re one of a kind — seriously, there\'s no duplicate in the database!',
-  '💖 The world is genuinely a better place with you in it.',
-  '💖 You have the energy of someone who actually enjoys Mondays. Rare and impressive.',
+  '💖 You light up every room you walk into!',
+  '💖 You\'re one of a kind — no duplicate in the database!',
   '💖 If you were a function, you\'d have zero bugs and perfect documentation.'
 ];
 
-function pick(arr) {
-  return arr[Math.floor(Math.random() * arr.length)];
-}
+const insults = [
+  '😤 You\'re like a `404 error` — completely useless and hard to find.',
+  '😤 If stupidity was a language, you\'d be fluent.',
+  '😤 You\'re as sharp as a `null pointer`.',
+  '😤 Your brain must be `undefined` — it returns nothing useful.',
+  '😤 Even Google can\'t find a reason to like you.',
+  '😤 You remind me of `Internet Explorer` — slow, outdated, and nobody wants you.'
+];
+
+const flirts = [
+  '😍 Are you a JavaScript error? Because you\'ve got my attention.',
+  '😍 Are you a `while(true)` loop? Because I can\'t stop thinking about you.',
+  '😍 You must be a `return` statement — you always come back to me.',
+  '😍 Is your name Wi-Fi? Because I feel a connection.',
+  '😍 Are you a keyboard? Because you\'re just my type.',
+  '😍 You must be a good algorithm — beautifully optimized.'
+];
+
+const facts = [
+  '💡 Honey never spoils. Archaeologists found 3000-year-old honey in Egyptian tombs.',
+  '💡 A day on Venus is longer than a year on Venus.',
+  '💡 The first computer bug was an actual bug — a moth found in a relay in 1947.',
+  '💡 Bananas are slightly radioactive due to potassium-40.',
+  '💡 Cleopatra lived closer in time to the Moon landing than to the construction of the pyramids.',
+  '💡 The total weight of all ants on Earth once exceeded the total weight of all humans.',
+  '💡 Hot water freezes faster than cold water — this is called the Mpemba effect.',
+  '💡 Octopuses have three hearts and blue blood.'
+];
+
+function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 
 const funCommands = {
   joke: {
-    desc: 'Get a random joke',
-    exec: async (args, sock, jid) => {
-      await sock.sendMessage(jid, { text: pick(jokes) });
-    }
+    category: 'fun', desc: 'Get a random joke',
+    usage: '.joke', aliases: ['jokes'], permissions: 'all', examples: ['.joke'],
+    exec: async (args, sock, jid) => sock.sendMessage(jid, { text: pick(jokes) })
   },
   quote: {
-    desc: 'Get an inspirational quote',
-    exec: async (args, sock, jid) => {
-      await sock.sendMessage(jid, { text: pick(quotes) });
-    }
+    category: 'fun', desc: 'Get an inspirational quote',
+    usage: '.quote', aliases: ['quotes', 'q'], permissions: 'all', examples: ['.quote'],
+    exec: async (args, sock, jid) => sock.sendMessage(jid, { text: pick(quotes) })
   },
   ship: {
-    desc: 'Calculate ship/compatibility percentage',
+    category: 'fun', desc: 'Calculate compatibility percentage',
+    usage: '.ship', aliases: ['love', 'lovecalc'], permissions: 'all', examples: ['.ship'],
     exec: async (args, sock, jid) => {
-      const pct = Math.floor(Math.random() * 101);
-      let rating = '💀 Terrible';
-      if (pct >= 90) rating = '💘 Soulmates!';
-      else if (pct >= 70) rating = '❤️ Great match!';
-      else if (pct >= 50) rating = '💛 Pretty good!';
-      else if (pct >= 30) rating = '💙 Meh, could work...';
-      await sock.sendMessage(jid, {
-        text: `💕 *Ship Calculator*\n\nCompatibility: *${pct}%*\nVerdict: ${rating}`
-      });
+      const pct  = Math.floor(Math.random() * 101);
+      const rank = pct >= 90 ? '💘 Soulmates!' : pct >= 70 ? '❤️ Great match!' :
+                   pct >= 50 ? '💛 Pretty good!' : pct >= 30 ? '💙 Meh, could work...' : '💀 Terrible match.';
+      await sock.sendMessage(jid, { text: `💕 *Ship Calculator*\n\nCompatibility: *${pct}%*\nVerdict: ${rank}` });
     }
   },
   dare: {
-    desc: 'Get a dare',
-    exec: async (args, sock, jid) => {
-      await sock.sendMessage(jid, { text: pick(dares) });
-    }
+    category: 'fun', desc: 'Get a dare challenge',
+    usage: '.dare', aliases: [], permissions: 'all', examples: ['.dare'],
+    exec: async (args, sock, jid) => sock.sendMessage(jid, { text: pick(dares) })
   },
   truth: {
-    desc: 'Get a truth question',
-    exec: async (args, sock, jid) => {
-      await sock.sendMessage(jid, { text: pick(truths) });
-    }
+    category: 'fun', desc: 'Get a truth question',
+    usage: '.truth', aliases: [], permissions: 'all', examples: ['.truth'],
+    exec: async (args, sock, jid) => sock.sendMessage(jid, { text: pick(truths) })
   },
   '8ball': {
-    desc: 'Ask the magic 8-ball',
+    category: 'fun', desc: 'Ask the magic 8-ball a yes/no question',
+    usage: '.8ball <question>', aliases: [], permissions: 'all',
+    examples: ['.8ball Will I win today?', '.8ball Is today my lucky day?'],
     exec: async (args, sock, jid) => {
-      const question = args.join(' ').trim();
-      if (!question) {
-        return await sock.sendMessage(jid, { text: '❓ Ask me something!\n\n*Usage:* .8ball Will I win today?' });
-      }
-      await sock.sendMessage(jid, {
-        text: `🎱 *Magic 8-Ball*\n\n❓ ${question}\n\n${pick(eightBallResponses)}`
-      });
+      const q = args.join(' ').trim();
+      if (!q) return sock.sendMessage(jid, { text: '❓ Ask me something!\n\n*Usage:* .8ball <question>' });
+      await sock.sendMessage(jid, { text: `🎱 *Magic 8-Ball*\n\n❓ ${q}\n\n${pick(eightBall)}` });
     }
   },
   roast: {
-    desc: 'Get roasted',
-    exec: async (args, sock, jid) => {
-      await sock.sendMessage(jid, { text: pick(roasts) });
-    }
+    category: 'fun', desc: 'Get roasted',
+    usage: '.roast', aliases: [], permissions: 'all', examples: ['.roast'],
+    exec: async (args, sock, jid) => sock.sendMessage(jid, { text: pick(roasts) })
   },
   compliment: {
-    desc: 'Get a compliment',
-    exec: async (args, sock, jid) => {
-      await sock.sendMessage(jid, { text: pick(compliments) });
+    category: 'fun', desc: 'Receive a compliment',
+    usage: '.compliment', aliases: ['comp'], permissions: 'all', examples: ['.compliment'],
+    exec: async (args, sock, jid) => sock.sendMessage(jid, { text: pick(compliments) })
+  },
+  insult: {
+    category: 'fun', desc: 'Get a (lighthearted) insult',
+    usage: '.insult', aliases: [], permissions: 'all', examples: ['.insult'],
+    exec: async (args, sock, jid) => sock.sendMessage(jid, { text: pick(insults) })
+  },
+  flirt: {
+    category: 'fun', desc: 'Get a nerdy flirt line',
+    usage: '.flirt', aliases: [], permissions: 'all', examples: ['.flirt'],
+    exec: async (args, sock, jid) => sock.sendMessage(jid, { text: pick(flirts) })
+  },
+  fact: {
+    category: 'fun', desc: 'Learn a random interesting fact',
+    usage: '.fact', aliases: ['facts', 'randomfact'], permissions: 'all', examples: ['.fact'],
+    exec: async (args, sock, jid) => sock.sendMessage(jid, { text: pick(facts) })
+  },
+  iq: {
+    category: 'fun', desc: 'Check your (fake) IQ score',
+    usage: '.iq', aliases: [], permissions: 'all', examples: ['.iq'],
+    exec: async (args, sock, jid, isGroup, sender) => {
+      const iq     = Math.floor(Math.random() * 101) + 60; // 60–160
+      const label  = iq >= 140 ? '🧠 Genius' : iq >= 120 ? '✨ Very smart' :
+                     iq >= 100 ? '📚 Average' : iq >= 80  ? '😐 Below average' : '💀 Yikes...';
+      await sock.sendMessage(jid, {
+        text: `🧠 *IQ Test*\n\n@${sender.split('@')[0]}, your IQ is *${iq}*\n\n${label}\n\n_Disclaimer: This is just for fun!_`,
+        mentions: [sender]
+      });
+    }
+  },
+  hack: {
+    category: 'fun', desc: 'Fake-hack someone (for fun)',
+    usage: '.hack [@user]', aliases: [], permissions: 'all',
+    examples: ['.hack @friend'],
+    exec: async (args, sock, jid, isGroup, sender, message) => {
+      const { getMentionedJid } = require('../lib/helpers');
+      const target  = getMentionedJid(message) || sender;
+      const name    = target.split('@')[0];
+      await sock.sendMessage(jid, {
+        text:
+          `💻 *Hacking @${name}...*\n\n` +
+          `[▓▓░░░░░░░░] 20% - Scanning ports...\n` +
+          `[▓▓▓▓▓░░░░░] 50% - Bypassing firewall...\n` +
+          `[▓▓▓▓▓▓▓▓░░] 80% - Accessing database...\n` +
+          `[▓▓▓▓▓▓▓▓▓▓] 100% - Done!\n\n` +
+          `✅ Successfully hacked @${name}!\n` +
+          `📧 Emails stolen: ${Math.floor(Math.random() * 9999)}\n` +
+          `💳 Cards found: ${Math.floor(Math.random() * 5)}\n` +
+          `🔑 Passwords: ************\n\n` +
+          `_This is just for fun. Stay safe online! 😄_`,
+        mentions: [target]
+      });
     }
   }
 };

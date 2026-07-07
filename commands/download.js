@@ -1,56 +1,119 @@
-// Download Commands
+'use strict';
+// commands/download.js — Downloader commands
+// All downloads are stubs that validate URLs and show processing messages.
+// Wire up a real download API (e.g. cobalt.tools, rapid API) to complete them.
+
+function validateUrl(url, patterns, name) {
+  if (!url) return `❌ Provide a ${name} URL.\n\n*Usage:* .${name.toLowerCase()} <url>`;
+  if (patterns && !patterns.some(p => url.includes(p))) return `❌ Invalid ${name} URL.`;
+  return null;
+}
+
+function stub(label, emoji, patterns, note = '') {
+  return async (args, sock, jid) => {
+    const url = args[0];
+    const err = validateUrl(url, patterns, label);
+    if (err) return sock.sendMessage(jid, { text: err });
+    await sock.sendMessage(jid, {
+      text: `${emoji} *Downloading ${label}...*\n\n🔗 ${url}\n\n⏳ Please wait...${note ? '\n\n' + note : ''}`
+    });
+  };
+}
+
+function queryStub(label, emoji) {
+  return async (args, sock, jid) => {
+    const q = args.join(' ').trim();
+    if (!q) return sock.sendMessage(jid, { text: `❌ Usage: .${label.toLowerCase()} <song/query>` });
+    await sock.sendMessage(jid, {
+      text: `${emoji} *Searching: ${q}*\n\n⏳ Please wait...`
+    });
+  };
+}
+
 const downloadCommands = {
   tiktok: {
-    desc: 'Download TikTok video',
-    exec: async (args, sock, jid) => {
-      const url = args[0];
-      if (!url) return await sock.sendMessage(jid, { text: '❌ Please provide a TikTok URL\n\n*Usage:*\n.tiktok <url>' });
-      if (!url.includes('tiktok') && !url.includes('vm.tiktok')) {
-        return await sock.sendMessage(jid, { text: '❌ Invalid TikTok URL\n\nPlease use a valid TikTok link' });
-      }
-      await sock.sendMessage(jid, { text: '⬇️ *Downloading TikTok video...*\n\nPlease wait, this may take a moment.' });
-    }
+    category: 'downloader', desc: 'Download TikTok video (no watermark)',
+    usage: '.tiktok <url>', aliases: ['tt'], permissions: 'all',
+    examples: ['.tiktok https://vm.tiktok.com/xxx'],
+    exec: stub('TikTok', '⬇️', ['tiktok', 'vm.tiktok'])
+  },
+  facebook: {
+    category: 'downloader', desc: 'Download Facebook video',
+    usage: '.facebook <url>', aliases: ['fb'], permissions: 'all',
+    examples: ['.facebook https://fb.com/video/...'],
+    exec: stub('Facebook', '⬇️', ['facebook', 'fb.com', 'fb.watch'])
   },
   fb: {
-    desc: 'Download Facebook video',
-    exec: async (args, sock, jid) => {
-      const url = args[0];
-      if (!url) return await sock.sendMessage(jid, { text: '❌ Please provide a Facebook URL\n\n*Usage:*\n.fb <url>' });
-      if (!url.includes('facebook') && !url.includes('fb.com')) {
-        return await sock.sendMessage(jid, { text: '❌ Invalid Facebook URL' });
-      }
-      await sock.sendMessage(jid, { text: '⬇️ *Downloading Facebook video...*\n\nPlease wait, this may take a moment.' });
-    }
+    category: 'downloader', desc: 'Download Facebook video (alias)',
+    usage: '.fb <url>', aliases: ['facebook'], permissions: 'all',
+    examples: ['.fb https://fb.com/video/...'],
+    exec: stub('Facebook', '⬇️', ['facebook', 'fb.com', 'fb.watch'])
+  },
+  instagram: {
+    category: 'downloader', desc: 'Download Instagram photo or video',
+    usage: '.instagram <url>', aliases: ['igdl', 'ig'], permissions: 'all',
+    examples: ['.instagram https://www.instagram.com/p/xxx'],
+    exec: stub('Instagram', '⬇️', ['instagram', 'ig.me', 'instagr.am'])
   },
   igdl: {
-    desc: 'Download Instagram',
-    exec: async (args, sock, jid) => {
-      const url = args[0];
-      if (!url) return await sock.sendMessage(jid, { text: '❌ Please provide an Instagram URL\n\n*Usage:*\n.igdl <url>' });
-      if (!url.includes('instagram') && !url.includes('ig.me') && !url.includes('instagr.am')) {
-        return await sock.sendMessage(jid, { text: '❌ Invalid Instagram URL' });
-      }
-      await sock.sendMessage(jid, { text: '⬇️ *Downloading Instagram media...*\n\nPlease wait, this may take a moment.' });
-    }
+    category: 'downloader', desc: 'Download Instagram (alias)',
+    usage: '.igdl <url>', aliases: ['instagram'], permissions: 'all',
+    examples: ['.igdl https://www.instagram.com/p/xxx'],
+    exec: stub('Instagram', '⬇️', ['instagram', 'ig.me', 'instagr.am'])
+  },
+  twitter: {
+    category: 'downloader', desc: 'Download Twitter / X video',
+    usage: '.twitter <url>', aliases: ['x'], permissions: 'all',
+    examples: ['.twitter https://twitter.com/user/status/xxx'],
+    exec: stub('Twitter/X', '⬇️', ['twitter.com', 'x.com', 't.co'])
+  },
+  ytmp3: {
+    category: 'downloader', desc: 'Download YouTube audio (MP3)',
+    usage: '.ytmp3 <url>', aliases: ['song'], permissions: 'all',
+    examples: ['.ytmp3 https://youtu.be/xxx'],
+    exec: stub('YouTube MP3', '🎵', ['youtube', 'youtu.be'])
+  },
+  ytmp4: {
+    category: 'downloader', desc: 'Download YouTube video (MP4)',
+    usage: '.ytmp4 <url>', aliases: ['video', 'yt'], permissions: 'all',
+    examples: ['.ytmp4 https://youtu.be/xxx'],
+    exec: stub('YouTube MP4', '🎬', ['youtube', 'youtu.be'])
   },
   yt: {
-    desc: 'Download YouTube',
-    exec: async (args, sock, jid) => {
-      const url = args[0];
-      if (!url) return await sock.sendMessage(jid, { text: '❌ Please provide a YouTube URL\n\n*Usage:*\n.yt <url>' });
-      if (!url.includes('youtube') && !url.includes('youtu.be')) {
-        return await sock.sendMessage(jid, { text: '❌ Invalid YouTube URL' });
-      }
-      await sock.sendMessage(jid, { text: '⬇️ *Downloading YouTube video...*\n\nPlease wait, this may take a moment.' });
-    }
+    category: 'downloader', desc: 'Download YouTube video',
+    usage: '.yt <url>', aliases: ['ytmp4'], permissions: 'all',
+    examples: ['.yt https://youtu.be/xxx'],
+    exec: stub('YouTube', '🎬', ['youtube', 'youtu.be'])
+  },
+  song: {
+    category: 'downloader', desc: 'Search and download a song (audio)',
+    usage: '.song <title>', aliases: ['ytmp3'], permissions: 'all',
+    examples: ['.song Blinding Lights', '.song Bohemian Rhapsody'],
+    exec: queryStub('song', '🎵')
+  },
+  video: {
+    category: 'downloader', desc: 'Search and download a video',
+    usage: '.video <title>', aliases: ['ytmp4'], permissions: 'all',
+    examples: ['.video funny cats compilation'],
+    exec: queryStub('video', '🎬')
   },
   play: {
-    desc: 'Search and download music',
-    exec: async (args, sock, jid) => {
-      const query = args.join(' ');
-      if (!query) return await sock.sendMessage(jid, { text: '❌ Please provide a song name\n\n*Usage:*\n.play <song name>' });
-      await sock.sendMessage(jid, { text: `🎵 *Searching for: ${query}*\n\nPlease wait, searching and downloading music...` });
-    }
+    category: 'downloader', desc: 'Search YouTube and play music',
+    usage: '.play <song name>', aliases: ['song'], permissions: 'all',
+    examples: ['.play Shape of You', '.play Despacito'],
+    exec: queryStub('play', '▶️')
+  },
+  spotify: {
+    category: 'downloader', desc: 'Download Spotify track',
+    usage: '.spotify <url>', aliases: [], permissions: 'all',
+    examples: ['.spotify https://open.spotify.com/track/xxx'],
+    exec: stub('Spotify', '🎧', ['spotify.com', 'open.spotify'])
+  },
+  mediafire: {
+    category: 'downloader', desc: 'Download file from MediaFire',
+    usage: '.mediafire <url>', aliases: ['mf'], permissions: 'all',
+    examples: ['.mediafire https://www.mediafire.com/file/xxx'],
+    exec: stub('MediaFire', '📁', ['mediafire.com'])
   }
 };
 

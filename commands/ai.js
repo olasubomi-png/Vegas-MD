@@ -1,7 +1,6 @@
-// AI Commands — real API integrations with pollinations.ai fallback
+'use strict';
+// commands/ai.js — AI commands with multi-provider support + pollinations fallback
 const axios = require('axios');
-
-// ─── Provider implementations ─────────────────────────────
 
 async function askOpenAI(query, model = 'gpt-3.5-turbo') {
   const { OpenAI } = require('openai');
@@ -35,11 +34,9 @@ async function askGemini(query) {
 
 async function askPollinations(query, model = 'openai') {
   const url = `https://text.pollinations.ai/${encodeURIComponent(query)}?model=${model}&seed=${Math.floor(Math.random() * 9999)}`;
-  const res = await axios.get(url, { timeout: 45000, headers: { 'User-Agent': 'OLASUBOMI-MD/3.0.0' } });
+  const res  = await axios.get(url, { timeout: 45000, headers: { 'User-Agent': 'OLASUBOMI-MD/3.0.0' } });
   return String(res.data).trim();
 }
-
-// ─── Unified AI handler ───────────────────────────────────
 
 async function handleAI(args, sock, jid, opts = {}) {
   const { label = 'AI', provider = 'auto', model } = opts;
@@ -55,7 +52,6 @@ async function handleAI(args, sock, jid, opts = {}) {
 
   try {
     let answer;
-
     if (provider === 'openai') {
       if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY not set');
       answer = await askOpenAI(query, model);
@@ -65,13 +61,12 @@ async function handleAI(args, sock, jid, opts = {}) {
     } else if (provider === 'gemini') {
       if (!process.env.GOOGLE_AI_API_KEY) throw new Error('GOOGLE_AI_API_KEY not set');
       answer = await askGemini(query);
+    } else if (provider === 'deepseek') {
+      answer = await askPollinations(query, 'deepseek');
     } else {
-      // auto: try real key then fall back
-      if (process.env.OPENAI_API_KEY) {
-        answer = await askOpenAI(query);
-      } else {
-        answer = await askPollinations(query, 'openai');
-      }
+      answer = process.env.OPENAI_API_KEY
+        ? await askOpenAI(query)
+        : await askPollinations(query, 'openai');
     }
 
     await sock.sendMessage(jid, {
@@ -81,8 +76,6 @@ async function handleAI(args, sock, jid, opts = {}) {
     const keyHint = err.message.includes('not set')
       ? `\n\n💡 Set the API key as a Replit Secret to use real ${label}.`
       : '';
-
-    // Fallback to pollinations
     try {
       const fallback = await askPollinations(query, 'openai');
       await sock.sendMessage(jid, {
@@ -96,72 +89,131 @@ async function handleAI(args, sock, jid, opts = {}) {
   }
 }
 
-// ─── Commands ─────────────────────────────────────────────
-
 const aiCommands = {
   ai: {
-    desc: 'Ask AI (auto-selects best available model)',
+    category: 'ai', desc: 'Ask AI (auto-selects best model)',
+    usage: '.ai <question>', aliases: [], permissions: 'all',
+    examples: ['.ai What is Node.js?'],
     exec: (args, sock, jid) => handleAI(args, sock, jid, { label: 'AI Assistant', provider: 'auto' })
   },
   gpt: {
-    desc: 'Ask ChatGPT (requires OPENAI_API_KEY)',
+    category: 'ai', desc: 'Ask ChatGPT (GPT-3.5)',
+    usage: '.gpt <question>', aliases: ['chatgpt'], permissions: 'all',
+    examples: ['.gpt Explain async/await'],
     exec: (args, sock, jid) => handleAI(args, sock, jid, { label: 'ChatGPT', provider: 'openai', model: 'gpt-3.5-turbo' })
   },
   gpt4: {
-    desc: 'Ask GPT-4 (requires OPENAI_API_KEY)',
+    category: 'ai', desc: 'Ask GPT-4o (most capable)',
+    usage: '.gpt4 <question>', aliases: [], permissions: 'all',
+    examples: ['.gpt4 Write a poem about rain'],
     exec: (args, sock, jid) => handleAI(args, sock, jid, { label: 'GPT-4', provider: 'openai', model: 'gpt-4o' })
   },
   chatgpt: {
-    desc: 'Alias for .gpt',
+    category: 'ai', desc: 'ChatGPT alias',
+    usage: '.chatgpt <question>', aliases: ['gpt'], permissions: 'all',
+    examples: ['.chatgpt Translate hello to French'],
     exec: (args, sock, jid) => handleAI(args, sock, jid, { label: 'ChatGPT', provider: 'openai' })
   },
   claude: {
-    desc: 'Ask Claude AI (requires ANTHROPIC_API_KEY)',
+    category: 'ai', desc: 'Ask Anthropic Claude',
+    usage: '.claude <question>', aliases: [], permissions: 'all',
+    examples: ['.claude Summarize the French Revolution'],
     exec: (args, sock, jid) => handleAI(args, sock, jid, { label: 'Claude', provider: 'claude' })
   },
   gemini: {
-    desc: 'Ask Google Gemini (requires GOOGLE_AI_API_KEY)',
+    category: 'ai', desc: 'Ask Google Gemini',
+    usage: '.gemini <question>', aliases: [], permissions: 'all',
+    examples: ['.gemini What is quantum computing?'],
     exec: (args, sock, jid) => handleAI(args, sock, jid, { label: 'Gemini', provider: 'gemini' })
   },
   copilot: {
-    desc: 'Ask GitHub Copilot (uses OPENAI_API_KEY)',
+    category: 'ai', desc: 'Ask GitHub Copilot (GPT-4o)',
+    usage: '.copilot <question>', aliases: [], permissions: 'all',
+    examples: ['.copilot Write a bubble sort in Python'],
     exec: (args, sock, jid) => handleAI(args, sock, jid, { label: 'Copilot', provider: 'openai', model: 'gpt-4o' })
   },
+  deepseek: {
+    category: 'ai', desc: 'Ask DeepSeek AI (free, no key needed)',
+    usage: '.deepseek <question>', aliases: [], permissions: 'all',
+    examples: ['.deepseek Explain machine learning'],
+    exec: (args, sock, jid) => handleAI(args, sock, jid, { label: 'DeepSeek', provider: 'deepseek' })
+  },
+  explain: {
+    category: 'ai', desc: 'Get a simple explanation of any topic',
+    usage: '.explain <topic>', aliases: [], permissions: 'all',
+    examples: ['.explain blockchain', '.explain photosynthesis'],
+    exec: async (args, sock, jid) => {
+      const topic = args.join(' ').trim();
+      if (!topic) return sock.sendMessage(jid, { text: '❌ Usage: .explain <topic>' });
+      await handleAI(
+        [`Explain "${topic}" in simple, easy-to-understand terms with an example. Be concise.`],
+        sock, jid, { label: 'Explain', provider: 'auto' }
+      );
+    }
+  },
   imagine: {
-    desc: 'Generate an AI image description',
+    category: 'ai', desc: 'Generate a vivid AI image description',
+    usage: '.imagine <description>', aliases: [], permissions: 'all',
+    examples: ['.imagine a futuristic city at night'],
     exec: async (args, sock, jid) => {
       const prompt = args.join(' ').trim();
       if (!prompt) return sock.sendMessage(jid, { text: '❌ Usage: .imagine <description>' });
       await sock.sendMessage(jid, { text: `🎨 Generating for: _"${prompt}"_...` });
       try {
-        const answer = await askPollinations(`Write a vivid, detailed visual description of: ${prompt}`, 'openai');
+        const answer = await askPollinations(
+          `Write a vivid, detailed visual description of: ${prompt}`, 'openai'
+        );
         await sock.sendMessage(jid, { text: `🎨 *AI Image Description*\n\n${answer}` });
       } catch (err) {
         await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
       }
     }
   },
+  flux: {
+    category: 'ai', desc: 'Generate an image with Flux AI (via pollinations)',
+    usage: '.flux <description>', aliases: [], permissions: 'all',
+    examples: ['.flux sunset over the ocean in anime style'],
+    exec: async (args, sock, jid) => {
+      const prompt = args.join(' ').trim();
+      if (!prompt) return sock.sendMessage(jid, { text: '❌ Usage: .flux <image description>' });
+      await sock.sendMessage(jid, { text: `🖼️ *Flux AI* generating...\n\n_"${prompt}"_` });
+      try {
+        const encoded = encodeURIComponent(prompt);
+        const imgUrl  = `https://image.pollinations.ai/prompt/${encoded}?model=flux&width=768&height=768&nologo=true`;
+        await sock.sendMessage(jid, {
+          image:   { url: imgUrl },
+          caption: `🖼️ *Flux AI*\n\n_"${prompt}"_`
+        });
+      } catch (err) {
+        await sock.sendMessage(jid, { text: `❌ Image generation failed: ${err.message}` });
+      }
+    }
+  },
   translate: {
-    desc: 'Translate text to any language',
+    category: 'ai', desc: 'Translate text to any language',
+    usage: '.translate <language> | <text>', aliases: [], permissions: 'all',
+    examples: ['.translate Spanish | Hello world', '.translate French | Good morning'],
     exec: async (args, sock, jid) => {
       const input = args.join(' ').trim();
-      if (!input) return sock.sendMessage(jid, { text: '❌ Usage: .translate <language> | <text>\nExample: .translate Spanish | Hello world' });
+      if (!input) return sock.sendMessage(jid, { text: '❌ Usage: .translate <language> | <text>' });
       const [lang, ...rest] = input.split('|');
       const text = rest.join('|').trim();
       if (!text) return sock.sendMessage(jid, { text: '❌ Usage: .translate <language> | <text>' });
       await handleAI(
-        [`Translate the following to ${lang.trim()}, reply with only the translation: "${text}"`],
+        [`Translate this to ${lang.trim()}, reply with only the translation: "${text}"`],
         sock, jid, { label: 'Translate', provider: 'auto' }
       );
     }
   },
   summarize: {
-    desc: 'Summarize a long text',
+    category: 'ai', desc: 'Summarize a long piece of text',
+    usage: '.summarize <text>', aliases: [], permissions: 'all',
+    examples: ['.summarize <paste long article here>'],
     exec: async (args, sock, jid) => {
       const text = args.join(' ').trim();
       if (!text) return sock.sendMessage(jid, { text: '❌ Usage: .summarize <long text>' });
       await handleAI(
-        [`Summarize the following in 3-5 bullet points: ${text}`],
+        [`Summarize the following in 3-5 bullet points:\n\n${text}`],
         sock, jid, { label: 'Summarize', provider: 'auto' }
       );
     }
