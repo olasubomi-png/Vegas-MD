@@ -22,11 +22,31 @@ function cacheMessage(message) {
 
   const jid    = message.key?.remoteJid;
   const sender = message.key?.participant || jid;
-  const text   =
-    message.message?.conversation ||
-    message.message?.extendedTextMessage?.text ||
-    message.message?.imageMessage?.caption ||
-    '[media]';
+  const msg    = message.message || {};
+
+  // Unwrap ephemeral / disappearing wrappers
+  const inner =
+    msg.ephemeralMessage?.message     ||
+    msg.viewOnceMessage?.message      ||
+    msg.viewOnceMessageV2?.message    ||
+    msg.viewOnceMessageV2Extension?.message ||
+    msg;
+
+  const text =
+    inner.conversation                           ||
+    inner.extendedTextMessage?.text              ||
+    inner.imageMessage?.caption                  ||
+    inner.videoMessage?.caption                  ||
+    inner.documentMessage?.caption               ||
+    inner.buttonsResponseMessage?.selectedDisplayText ||
+    inner.listResponseMessage?.title             ||
+    inner.templateButtonReplyMessage?.selectedDisplayText ||
+    (inner.stickerMessage   ? '[sticker]'  : null) ||
+    (inner.audioMessage     ? '[audio]'    : null) ||
+    (inner.videoMessage     ? '[video]'    : null) ||
+    (inner.imageMessage     ? '[image]'    : null) ||
+    (inner.documentMessage  ? '[document]' : null) ||
+    '[message]';
 
   msgCache.set(id, { jid, sender, text, ts: Date.now() });
 
@@ -43,18 +63,32 @@ async function handleAntiDelete(sock, deletedKeys) {
     const cached = msgCache.get(key.id);
     if (!cached) continue;
 
-    const groupJid = key.remoteJid;
-    if (!groupJid?.endsWith('@g.us')) continue;
+    const chatJid   = key.remoteJid || cached.jid;
+    const isGroup   = chatJid?.endsWith('@g.us');
 
-    const settings = db.getGroup(groupJid);
-    if (!settings.antiDelete) continue;
+    // Groups: respect per-group antiDelete toggle
+    if (isGroup) {
+      const settings = db.getGroup(chatJid);
+      if (!settings.antiDelete) continue;
+    } else {
+      // DMs: use global antiDelete setting
+      const globalAntiDelete = db.getSetting('antiDelete', null);
+      if (!globalAntiDelete) continue;
+    }
 
     try {
       const senderNum = cached.sender.split('@')[0];
-      await sock.sendMessage(groupJid, {
-        text: `🗑️ *Anti-Delete Alert*\n\n@${senderNum} deleted a message:\n\n"${cached.text}"`,
-        mentions: [cached.sender]
-      });
+      if (isGroup) {
+        await sock.sendMessage(chatJid, {
+          text: `🗑️ *Anti-Delete Alert*\n\n@${senderNum} deleted a message:\n\n"${cached.text}"`,
+          mentions: [cached.sender]
+        });
+      } else {
+        // In a DM the sender IS the chat — just reply
+        await sock.sendMessage(chatJid, {
+          text: `🗑️ *Anti-Delete Alert*\n\nYou deleted a message:\n\n"${cached.text}"`
+        });
+      }
     } catch (err) {
       console.error('[antiDelete]', err.message);
     }
