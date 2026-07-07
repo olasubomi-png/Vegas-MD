@@ -25,6 +25,18 @@ function register(mod, sourceLabel) {
     const cat = (cmd.category || 'utility').toLowerCase();
     if (!categoryRegistry[cat]) categoryRegistry[cat] = [];
     if (!categoryRegistry[cat].includes(name)) categoryRegistry[cat].push(name);
+
+    // Register aliases so they resolve to the same exec — without this,
+    // declared aliases silently fail as "unknown command" at dispatch time.
+    if (Array.isArray(cmd.aliases)) {
+      for (const alias of cmd.aliases) {
+        if (!alias) continue;
+        if (!allCommands[alias]) {
+          allCommands[alias] = cmd;
+          // Aliases are not added to categoryRegistry to avoid duplicate entries in menus
+        }
+      }
+    }
   }
 }
 

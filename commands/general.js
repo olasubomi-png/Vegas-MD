@@ -1,6 +1,7 @@
 'use strict';
 // commands/general.js — General utility commands
 const db = require('../lib/database');
+const { downloadMediaMessage } = require('baileys');
 
 const REPO_URL = 'https://github.com/olasubomi-png/Vegas-MD';
 
@@ -66,20 +67,46 @@ const generalCommands = {
       const imgMsg   = voMsg.imageMessage;
       const videoMsg = voMsg.videoMessage;
 
-      if (imgMsg) {
+      // Build a synthetic Baileys message object that downloadMediaMessage can
+      // use to locate, fetch, and decrypt the encrypted CDN media.
+      // The key must point to the ORIGINAL message (not the quoting one) so
+      // Baileys can request a media re-upload if the CDN URL has expired.
+      const fakeMsg = {
+        key:     ctx?.stanzaId
+          ? { ...message.key, id: ctx.stanzaId, participant: ctx.participant || message.key.participant }
+          : message.key,
+        message: voMsg
+      };
+
+      // Reupload context lets Baileys request a fresh CDN URL from WhatsApp
+      // when the original URL has expired (common for older view-once media).
+      const reuploaderCtx = { reuploadRequest: sock.updateMediaMessage };
+
+      try {
+        if (imgMsg) {
+          // Must decrypt via downloadMediaMessage — imgMsg.url is the raw
+          // encrypted CDN URL and cannot be passed directly to sock.sendMessage.
+          const buffer = await downloadMediaMessage(fakeMsg, 'buffer', reuploaderCtx);
+          await sock.sendMessage(jid, {
+            image:    buffer,
+            caption:  `👁️ *Revealed view-once image*`,
+            mimetype: imgMsg.mimetype
+          });
+        } else if (videoMsg) {
+          const buffer = await downloadMediaMessage(fakeMsg, 'buffer', reuploaderCtx);
+          await sock.sendMessage(jid, {
+            video:    buffer,
+            caption:  `👁️ *Revealed view-once video*`,
+            mimetype: videoMsg.mimetype
+          });
+        } else {
+          await sock.sendMessage(jid, { text: `❌ Could not reveal this view-once message.` });
+        }
+      } catch (dlErr) {
+        console.error('[vv] downloadMediaMessage failed:', dlErr.message);
         await sock.sendMessage(jid, {
-          image:    { url: imgMsg.url },
-          caption:  `👁️ *Revealed view-once image*`,
-          mimetype: imgMsg.mimetype
+          text: `❌ Could not download the view-once media.\n\n_The media may have expired or been deleted from WhatsApp's servers._`
         });
-      } else if (videoMsg) {
-        await sock.sendMessage(jid, {
-          video:    { url: videoMsg.url },
-          caption:  `👁️ *Revealed view-once video*`,
-          mimetype: videoMsg.mimetype
-        });
-      } else {
-        await sock.sendMessage(jid, { text: `❌ Could not reveal this view-once message.` });
       }
     }
   },
