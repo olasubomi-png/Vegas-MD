@@ -244,11 +244,23 @@ function attachHandlers(sock, saveCreds) {
             console.error('[handler] antiViewOnce:', e.stack || e.message)
           );
 
+          // ── Unwrap ephemeral / view-once containers ──────────
+          // WhatsApp wraps ALL messages in ephemeralMessage when
+          // disappearing messages are on for that chat.  Without
+          // this unwrap, text is always '' and NO command fires.
+          const innerMsg =
+            message.message.ephemeralMessage?.message              ||
+            message.message.ephemeralMessageV2Extension?.message   ||
+            message.message.viewOnceMessage?.message               ||
+            message.message.viewOnceMessageV2?.message             ||
+            message.message.viewOnceMessageV2Extension?.message    ||
+            message.message;
+
           const text =
-            message.message.conversation                    ||
-            message.message.extendedTextMessage?.text       ||
-            message.message.imageMessage?.caption           ||
-            message.message.videoMessage?.caption           || '';
+            innerMsg.conversation                    ||
+            innerMsg.extendedTextMessage?.text       ||
+            innerMsg.imageMessage?.caption           ||
+            innerMsg.videoMessage?.caption           || '';
 
           console.log(`[WA] extracted text: "${text}"`);
 
