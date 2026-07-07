@@ -40,6 +40,7 @@ global.db           = db;
 let currentSock    = null;
 let isConnecting   = false;
 let reconnectTimer = null;
+let _sockSeq       = 0;   // monotonically increasing socket ID for identity tracing
 
 // ─────────────────────────────────────────────────────────
 // destroySocket — remove all listeners then close the WS
@@ -66,7 +67,9 @@ function destroySocket(sock) {
 //     Returning undefined is safe and matches the default.
 // ─────────────────────────────────────────────────────────
 function createSocket(state) {
-  return makeWASocket({
+  const sockId = ++_sockSeq;
+  console.log(`[WA] createSocket — sock#${sockId}`);
+  const sock = makeWASocket({
     auth:                state,
     printQRInTerminal:   false,
     browser:             ['Ubuntu', 'Chrome', '121.0.6167.160'],
@@ -74,13 +77,11 @@ function createSocket(state) {
     keepAliveIntervalMs: 25_000,
     retryRequestDelayMs: 250,
     maxMsListenerCount:  50,
-    // ── CRITICAL FIX #1 ───────────────────────────────────
-    // Skip full history sync so the event buffer is never held
-    // open waiting for a sync notification that may never come.
     syncFullHistory:     false,
-    // Provide a getMessage fallback so retry logic never throws
     getMessage:          async () => undefined,
   });
+  sock._id = sockId;
+  return sock;
 }
 
 // ─────────────────────────────────────────────────────────
@@ -96,7 +97,23 @@ function createSocket(state) {
 //   that layer.
 // ─────────────────────────────────────────────────────────
 function attachHandlers(sock, saveCreds) {
-  console.log('[WA] attachHandlers: attaching via sock.ev.process()');
+  const sockId = sock._id;
+  console.log(`[WA] attachHandlers: sock#${sockId} — currentSock#${currentSock?._id ?? 'none'}`);
+
+  // ── Wrap sock.sendMessage to trace every send attempt ──
+  const _origSend = sock.sendMessage.bind(sock);
+  sock.sendMessage = async (jid, content, options) => {
+    const preview = JSON.stringify(content).slice(0, 120);
+    console.log(`[send] sock#${sockId} → ${jid} | ${preview}`);
+    try {
+      const res = await _origSend(jid, content, options);
+      console.log(`[send] ✅ sock#${sockId} → ${jid} OK (msgId: ${res?.key?.id})`);
+      return res;
+    } catch (err) {
+      console.error(`[send] ❌ sock#${sockId} → ${jid} FAILED:\n${err.stack || err.message}`);
+      throw err;
+    }
+  };
 
   // ── CRITICAL FIX #2 ──────────────────────────────────
   // Use sock.ev.process() — direct subscriber to the flushed
@@ -144,14 +161,16 @@ function attachHandlers(sock, saveCreds) {
       }
 
       if (connection === 'open') {
-        console.log(`\n✅ ${botConfig.name} connected!`);
-        console.log('═'.repeat(36));
+        console.log(`\n✅ ${botConfig.name} connected! (sock#${sockId})`);
+        console.log('═'.repeat(52));
         console.log(`  Version  : ${botConfig.version} ${botConfig.beta}`);
         console.log(`  Prefix   : ${botConfig.prefix}`);
         console.log(`  Mode     : ${botConfig.mode}`);
-        console.log(`  Commands : ${Object.keys(allCommands).length}`);
-        console.log(`  Owner    : ${botConfig.ownerNumber || '⚠  Not set'}`);
-        console.log('═'.repeat(36) + '\n');
+        console.log(`  Owner    : ${botConfig.ownerNumber || '⚠  Not set — set OWNER_NUMBER secret'}`);
+        const cmdNames = Object.keys(allCommands).sort();
+        console.log(`  Commands : ${cmdNames.length} registered`);
+        console.log(`  List     : ${cmdNames.join(', ')}`);
+        console.log('═'.repeat(52) + '\n');
       }
     }
 
@@ -159,90 +178,90 @@ function attachHandlers(sock, saveCreds) {
     if (events['messages.upsert']) {
       const { messages, type } = events['messages.upsert'];
 
-      // Log EVERY upsert so we can verify the listener fires after reconnect
-      console.log(`[WA] messages.upsert — type: ${type}, count: ${messages.length}`);
+      console.log(`[WA] messages.upsert sock#${sockId} — type: ${type}, count: ${messages.length}`);
 
+      // NOTE: do NOT `return` here — that would abort the entire process()
+      // callback and skip messages.delete / group-participants.update that
+      // may be in the same event batch.
       if (type !== 'notify') {
-        console.log(`[WA] skipping non-notify type: ${type}`);
-        return;
-      }
+        console.log(`[WA] skipping non-notify upsert (type: ${type})`);
+      } else {
+        for (const message of messages) {
+          console.log(`[WA] msg key: jid=${message.key?.remoteJid} fromMe=${message.key?.fromMe} id=${message.key?.id}`);
 
-      for (const message of messages) {
-        // Log raw message key for debugging
-        console.log(`[WA] msg key: jid=${message.key?.remoteJid} fromMe=${message.key?.fromMe} id=${message.key?.id}`);
+          if (!message.message) {
+            console.log('[WA] skipping: message.message is null (stub/protocol msg)');
+            continue;
+          }
 
-        if (!message.message) {
-          console.log('[WA] skipping: message.message is null (stub/protocol)');
-          continue;
-        }
+          const jid    = message.key.remoteJid;
+          const sender = message.key.participant || jid;
 
-        const jid    = message.key.remoteJid;
-        const sender = message.key.participant || jid;
+          cacheMessage(message);
 
-        // Cache for anti-delete
-        cacheMessage(message);
+          if (message.key.fromMe) {
+            console.log('[WA] skipping: fromMe=true');
+            continue;
+          }
 
-        if (message.key.fromMe) {
-          console.log('[WA] skipping: fromMe');
-          continue;
-        }
+          // Status updates
+          if (jid === 'status@broadcast') {
+            await handleStatusUpdate(sock, [message]).catch(e =>
+              console.error('[handler] autoStatus:', e.stack || e.message)
+            );
+            continue;
+          }
 
-        // Status updates
-        if (jid === 'status@broadcast') {
-          await handleStatusUpdate(sock, [message]).catch(e =>
-            console.error('[handler] autoStatus:', e.message)
+          // Banned users
+          if (db.isBanned(sender)) {
+            console.log(`[WA] skipping: ${sender} is banned`);
+            continue;
+          }
+
+          await handleAutoReact(sock, message).catch(e =>
+            console.error('[handler] autoReact:', e.stack || e.message)
           );
-          continue;
-        }
+          await handleAntiViewOnce(sock, message).catch(e =>
+            console.error('[handler] antiViewOnce:', e.stack || e.message)
+          );
 
-        // Banned users
-        if (db.isBanned(sender)) {
-          console.log(`[WA] skipping: sender ${sender} is banned`);
-          continue;
-        }
+          const text =
+            message.message.conversation                    ||
+            message.message.extendedTextMessage?.text       ||
+            message.message.imageMessage?.caption           ||
+            message.message.videoMessage?.caption           || '';
 
-        await handleAutoReact(sock, message).catch(e =>
-          console.error('[handler] autoReact:', e.message)
-        );
-        await handleAntiViewOnce(sock, message).catch(e =>
-          console.error('[handler] antiViewOnce:', e.message)
-        );
+          console.log(`[WA] extracted text: "${text}"`);
 
-        const text =
-          message.message.conversation ||
-          message.message.extendedTextMessage?.text ||
-          message.message.imageMessage?.caption     || '';
+          const prefix = db.getSetting('prefix') || botConfig.prefix || '.';
+          console.log(`[WA] active prefix: "${prefix}"`);
 
-        console.log(`[WA] text: "${text}"`);
+          if (text && isJidGroup(jid)) {
+            const blocked = await handleAntiLink(sock, message, botConfig).catch(e => {
+              console.error('[handler] antiLink:', e.stack || e.message);
+              return false;
+            });
+            if (blocked) { console.log('[WA] antiLink blocked message'); continue; }
+            await handleAntiSpam(sock, message, botConfig).catch(e =>
+              console.error('[handler] antiSpam:', e.stack || e.message)
+            );
+          }
 
-        const prefix = db.getSetting('prefix') || botConfig.prefix || '.';
+          if (!text.startsWith(prefix)) {
+            console.log(`[WA] not a command — text does not start with prefix "${prefix}"`);
+            continue;
+          }
 
-        if (text && isJidGroup(jid)) {
-          const blocked = await handleAntiLink(sock, message, botConfig).catch(e => {
-            console.error('[handler] antiLink:', e.message);
-            return false;
-          });
-          if (blocked) continue;
-          await handleAntiSpam(sock, message, botConfig).catch(e =>
-            console.error('[handler] antiSpam:', e.message)
+          const parts   = text.slice(prefix.length).trim().split(/ +/);
+          const command = parts.shift().toLowerCase();
+          if (!command) { console.log('[WA] empty command after prefix'); continue; }
+
+          console.log(`[WA] dispatching .${command} to handleCommand (sock#${sockId})`);
+
+          handleCommand(command, parts, message, sock, botConfig).catch(err =>
+            console.error(`[cmd] .${command} unhandled exception:\n${err.stack || err.message}`)
           );
         }
-
-        // Command routing
-        if (!text.startsWith(prefix)) {
-          console.log(`[WA] not a command (prefix "${prefix}" not matched)`);
-          continue;
-        }
-
-        const parts   = text.slice(prefix.length).trim().split(/ +/);
-        const command = parts.shift().toLowerCase();
-        if (!command) continue;
-
-        console.log(`[WA] dispatching command: .${command}`);
-
-        handleCommand(command, parts, message, sock, botConfig).catch(err =>
-          console.error(`[cmd] .${command} unhandled:`, err.message)
-        );
       }
     }
 
@@ -359,45 +378,66 @@ async function isGroupAdmin(jid, senderJid) {
 
 // ─── Command dispatcher ───────────────────────────────────
 async function handleCommand(command, args, message, sock, botConfig) {
-  const jid      = message.key.remoteJid;
-  const isGroup  = isJidGroup(jid);
-  const sender   = message.key.participant || jid;
+  const jid       = message.key.remoteJid;
+  const isGroup   = isJidGroup(jid);
+  const sender    = message.key.participant || jid;
   const senderNum = normalizeJid(sender);
   const ownerNum  = normalizeJid(botConfig.ownerNumber);
 
-  // Private mode guard
+  // Verify socket identity: handleCommand should always receive the live socket
+  console.log(`[cmd] handleCommand entered — .${command} | sock#${sock?._id} currentSock#${currentSock?._id}`);
+  console.log(`[cmd]   jid      : ${jid}`);
+  console.log(`[cmd]   sender   : ${sender} → normalised: "${senderNum}"`);
+  console.log(`[cmd]   owner    : "${botConfig.ownerNumber}" → normalised: "${ownerNum}"`);
+  console.log(`[cmd]   mode     : ${botConfig.mode}`);
+  console.log(`[cmd]   isGroup  : ${isGroup}`);
+
+  // ── Permission check: private mode ─────────────────────
   if (botConfig.mode === 'private') {
     if (!ownerNum) {
+      console.log('[cmd]   private mode: OWNER_NUMBER not set — sending warning');
       return sock.sendMessage(jid, {
         text: '🔒 Bot is in *private mode* but OWNER_NUMBER is not set.\n\n' +
               'Add it as a Replit Secret to activate the bot.'
       });
     }
     if (senderNum !== ownerNum) {
-      console.log(`[WA] private mode: blocked ${senderNum} (owner: ${ownerNum})`);
+      console.log(`[cmd]   private mode: BLOCKED — sender "${senderNum}" ≠ owner "${ownerNum}"`);
       return;
     }
+    console.log('[cmd]   private mode: sender IS owner — allowed');
   }
 
+  // ── Command lookup ──────────────────────────────────────
+  const registeredNames = Object.keys(allCommands);
+  console.log(`[cmd]   registered commands (${registeredNames.length}): ${registeredNames.join(', ')}`);
   const cmd = allCommands[command];
   if (!cmd) {
+    console.log(`[cmd]   command ".${command}" NOT FOUND in registry`);
     return sock.sendMessage(jid, {
       text: `❌ Unknown command: *${command}*\nType *${botConfig.prefix}menu* for help.`
     });
   }
+  console.log(`[cmd]   command ".${command}" FOUND — exec type: ${typeof cmd.exec}`);
 
+  // ── Inject helpers onto message ─────────────────────────
   message._isOwner      = ownerNum ? senderNum === ownerNum : false;
   message._isGroupAdmin = isGroup
     ? () => isGroupAdmin(jid, sender)
     : async () => false;
 
+  console.log(`[cmd]   _isOwner: ${message._isOwner}`);
+
+  // ── Execute ─────────────────────────────────────────────
+  console.log(`[cmd]   calling cmd.exec for .${command}...`);
   try {
     await cmd.exec(args, sock, jid, isGroup, sender, message, botConfig);
+    console.log(`[cmd]   .${command} exec completed OK`);
   } catch (err) {
-    console.error(`[cmd] .${command} error:`, err.message);
+    console.error(`[cmd]   .${command} THREW:\n${err.stack || err.message}`);
     await sock.sendMessage(jid, {
       text: `❌ Error in .${command}: ${err.message}`
-    }).catch(() => {});
+    }).catch(e2 => console.error('[cmd]   sendMessage (error reply) also failed:', e2.stack || e2.message));
   }
 }
 
