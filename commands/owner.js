@@ -249,7 +249,12 @@ const ownerCommands = {
     examples: ['.restart'],
     exec: ownerOnly(async (args, sock, jid) => {
       await sock.sendMessage(jid, { text: '🔄 *Restarting bot...*\n\nBe right back!' });
-      setTimeout(() => process.exit(0), 1500);
+      // Exit with code 1 (non-zero) so PM2 / any process manager treats this
+      // as an abnormal exit and auto-restarts. exit(0) signals a clean finish
+      // which some supervisors honour by NOT restarting. On Replit without PM2,
+      // any exit kills the process permanently — add a process manager or use
+      // Replit's built-in workflow restart to recover from .restart.
+      setTimeout(() => process.exit(1), 1500);
     })
   },
 

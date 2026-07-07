@@ -1,3 +1,6 @@
+// ── Load .env FIRST so every subsequent require sees the vars ────────────────
+require('dotenv').config();
+
 const fs = require('fs');
 const {
   default: makeWASocket,
@@ -29,7 +32,6 @@ const {
 } = require('./events/protection');
 const { handleStatusUpdate } = require('./events/autoStatus');
 const allCommands = require('./commands/index');
-require('dotenv').config();
 
 // ─── Bot configuration ────────────────────────────────────
 const botConfig = {
@@ -46,6 +48,23 @@ const botConfig = {
 global.botStartTime = Date.now();
 global.botConfig    = botConfig;
 global.db           = db;
+
+// ─── WA protocol version cache ────────────────────────────────────────────────
+// Fetching inside connect() on every reconnect adds a live network round-trip
+// that is especially dangerous during mid-pairing reconnects (the handshake
+// window is tight — a stall or failure delays reconnect by 10 s, giving
+// WhatsApp no companion_hello and aborting the link).
+//
+// Strategy:
+//   • Fetch once at startup (before the first connect) and cache with a timestamp.
+//   • On each non-pairing reconnect, refresh the cache if it is older than
+//     VERSION_CACHE_TTL_MS (6 h) so long-lived bots don't drift from the
+//     current WA protocol version.
+//   • During an active pairing attempt (pairingCodeRequested=true) ALWAYS use
+//     the cached value to protect the handshake window — a version re-fetch is
+//     never worth risking the pairing flow.
+const VERSION_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+let cachedWaVersion = null; // { version, isLatest, fetchedAt }
 
 // ─── Socket state — one socket at a time ──────────────────
 let currentSock          = null;
@@ -185,15 +204,30 @@ function attachHandlers(sock, saveCreds) {
           );
         } else {
           // Phone number priority: Replit Secret → persisted db setting → fail clearly.
-          const phoneNumber = process.env.OWNER_NUMBER
-                           || db.getSetting('ownerNumber', null)
-                           || '';
+          // ── ROOT CAUSE FIX ────────────────────────────────────────────────
+          // Baileys' requestPairingCode() passes the number directly to
+          // jidEncode(phoneNumber, 's.whatsapp.net').  Any non-digit character
+          // ('+', spaces, dashes, parentheses) produces an invalid JID such as
+          // "+234...@s.whatsapp.net", which WhatsApp rejects immediately.
+          // The rejection throws, pairingCodeRequested resets to false, and the
+          // bot retries on every QR refresh in an infinite failure loop — the
+          // user never sees a working pairing code.
+          // Fix: strip every non-digit character before handing to Baileys.
+          // Coerce to string before replacing — db.getSetting() could return a
+          // non-string (e.g. a stored number) which would throw on .replace().
+          const rawNumber = String(
+            process.env.OWNER_NUMBER || db.getSetting('ownerNumber', null) || ''
+          );
+          const phoneNumber = rawNumber.replace(/\D/g, ''); // digits only
 
           if (!phoneNumber) {
             console.log('[WA] ⚠  Cannot request pairing code — phone number not set.');
             console.log('[WA]    Add OWNER_NUMBER as a Replit Secret (country code + digits,');
             console.log('[WA]    no + or spaces, e.g. 2349061198658) then restart the bot.');
           } else {
+            if (rawNumber !== phoneNumber) {
+              console.log(`[WA] Phone number sanitised: "${rawNumber}" → "${phoneNumber}" (non-digits stripped)`);
+            }
             // Set flag BEFORE the async call so a concurrent QR event
             // cannot race through the guard while we await the code.
             pairingCodeRequested = true;
@@ -486,11 +520,25 @@ async function connect({ freshLogin = false } = {}) {
   }
 
   try {
-    // Resolve the latest Baileys-known WA protocol version.
-    // This avoids using a stale hardcoded version if the library
-    // was installed a while ago.
-    const { version, isLatest } = await fetchLatestBaileysVersion();
-    console.log(`[WA] WA version: ${version.join('.')} (isLatest: ${isLatest})`);
+    // Resolve the WA protocol version from cache (see VERSION_CACHE_TTL_MS).
+    // Rules:
+    //   1. No cache at all → fetch now (first connect after startup fetch failed).
+    //   2. pairingCodeRequested=true → ALWAYS use cache; never risk the pairing
+    //      handshake window on a network round-trip.
+    //   3. Cache older than VERSION_CACHE_TTL_MS (6 h) → refresh now (normal
+    //      reconnect on a long-lived bot; WA protocol updates need to be picked up).
+    const preFetchAgeMs = cachedWaVersion ? Date.now() - cachedWaVersion.fetchedAt : Infinity;
+    const cacheStale    = preFetchAgeMs > VERSION_CACHE_TTL_MS;
+    if (!cachedWaVersion || (cacheStale && !pairingCodeRequested)) {
+      const reason = !cachedWaVersion ? 'no cache' : `cache stale (${Math.round(preFetchAgeMs / 3_600_000)}h old)`;
+      console.log(`[WA] Refreshing WA version — ${reason}...`);
+      const { version: v, isLatest: il } = await fetchLatestBaileysVersion();
+      cachedWaVersion = { version: v, isLatest: il, fetchedAt: Date.now() };
+    }
+    const { version, isLatest } = cachedWaVersion;
+    // Log age AFTER any refresh so the reported value is always accurate.
+    const cacheAgeMs = Date.now() - cachedWaVersion.fetchedAt;
+    console.log(`[WA] WA version: ${version.join('.')} (isLatest: ${isLatest}, cacheAgeMs: ${Math.round(cacheAgeMs)})`);
 
     // Ensure auth directory exists — prevents ENOENT on fresh deployments
     fs.mkdirSync('auth_info_baileys', { recursive: true });
@@ -597,5 +645,17 @@ async function handleCommand(command, args, message, sock, botConfig) {
 }
 
 // ─── Start ────────────────────────────────────────────────
+// Fetch the WA protocol version ONCE at startup, before the first connect().
+// All reconnects (including mid-pairing ones) reuse this cached value so no
+// extra network round-trip is added inside the handshake window.
 console.log('🚀 Starting OLASUBOMI-MD...');
-connect().catch(err => console.error('[startup] Fatal:', err.message));
+(async () => {
+  try {
+    const { version, isLatest } = await fetchLatestBaileysVersion();
+    cachedWaVersion = { version, isLatest, fetchedAt: Date.now() };
+    console.log(`[WA] WA version pre-fetched: ${version.join('.')} (isLatest: ${isLatest})`);
+  } catch (err) {
+    console.warn(`[WA] Could not pre-fetch WA version: ${err.message} — will retry inside connect()`);
+  }
+  connect().catch(err => console.error('[startup] Fatal:', err.message));
+})();

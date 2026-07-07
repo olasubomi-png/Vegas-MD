@@ -4,7 +4,11 @@ module.exports = {
       name: 'OLASUBOMI-MD',
       script: './main.js',
       instances: 1,
-      exec_mode: 'cluster',
+      // fork mode is correct for a WhatsApp bot. cluster mode is designed for
+      // HTTP servers that share a port across multiple cores; using it here adds
+      // a master/worker layer that interferes with socket state, alters stdin
+      // handling, and can cause ghost reconnects during pairing.
+      exec_mode: 'fork',
       watch: false,
       env: {
         NODE_ENV: 'production',
