@@ -338,7 +338,7 @@ const groupCommands = {
   welcome:      makeToggle('welcome',     'Welcome messages', '👋'),
   goodbye:      makeToggle('goodbye',     'Goodbye messages', '🚪'),
   antilink:     makeToggle('antiLink',    'Anti-link',        '🔗'),
-  antidelete:   makeToggle('antiDelete',  'Anti-delete',      '🗑️'),
+  antideletegrp: makeToggle('antiDelete',  'Anti-delete (this group)',  '🗑️'),
   antispam:     makeToggle('antiSpam',    'Anti-spam',        '🚨'),
   antiviewonce: makeToggle('antiViewOnce','Anti-view-once',   '👁️'),
   autoreact:    makeToggle('autoReact',   'Auto-react',       '❤️'),

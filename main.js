@@ -854,6 +854,24 @@ console.log('🚀 Starting OLASUBOMI-MD...');
     console.warn(`[WA] Could not pre-fetch WA version: ${err.message} — will retry inside connect()`);
   }
 
+  // ── Auto-reset pairing counter when auth dir is absent or empty ───────────
+  // When the user manually deletes auth_info_baileys/ and restarts, the
+  // .pairing_attempts.json counter is still at its old value (e.g. 8/10).
+  // Without this reset the bot immediately hits the high-backoff path even
+  // though it has a completely clean slate to work from.
+  try {
+    const authDir    = 'auth_info_baileys';
+    const dirExists  = fs.existsSync(authDir);
+    const dirEmpty   = dirExists && fs.readdirSync(authDir).length === 0;
+    if (!dirExists || dirEmpty) {
+      const prev = readPairingAttempts();
+      if (prev.count > 0) {
+        resetPairingAttempts();
+        console.log(`[pairing-guard] auth_info_baileys/ is clean — reset stale failure counter (was ${prev.count}).`);
+      }
+    }
+  } catch (_) {}
+
   // ── Expose handleCommand globally so sessionManager can route secondary sessions ──
   global._smHandleCommand = handleCommand;
 
