@@ -1,5 +1,5 @@
 'use strict';
-// commands/main.js — Menu system, help, ping, alive, uptime, status
+// commands/main.js — Premium menu system, help, ping, alive, uptime, status
 const fs   = require('fs');
 const path = require('path');
 const db   = require('../lib/database');
@@ -25,126 +25,166 @@ function getUptime() {
   return [d && `${d}d`, h && `${h}h`, m && `${m}m`, `${sec}s`].filter(Boolean).join(' ');
 }
 
-// ── Category display metadata (order = CATEGORY_ORDER in index.js) ──
+// ── Ping quality label ────────────────────────────────────
+function pingLabel(ms) {
+  if (ms == null) return '— ms  ⚪';
+  if (ms < 100)  return `${ms} ms  🟢`;
+  if (ms < 300)  return `${ms} ms  🟡`;
+  return `${ms} ms  🔴`;
+}
+
+// ── Category display metadata ─────────────────────────────
 const CATEGORY_META = {
-  general:    { emoji: '🏠', label: 'GENERAL' },
-  ai:         { emoji: '🤖', label: 'AI' },
-  downloader: { emoji: '⬇️',  label: 'DOWNLOADER' },
-  search:     { emoji: '🔍', label: 'SEARCH' },
-  converter:  { emoji: '🔄', label: 'CONVERTER' },
-  sticker:    { emoji: '🎨', label: 'STICKER & IMAGE' },
-  group:      { emoji: '👥', label: 'GROUP' },
-  moderation: { emoji: '🛡️',  label: 'MODERATION' },
-  fun:        { emoji: '🎮', label: 'FUN' },
-  games:      { emoji: '🎯', label: 'GAMES' },
-  economy:    { emoji: '💰', label: 'ECONOMY' },
-  audio:      { emoji: '🎵', label: 'AUDIO' },
-  utility:    { emoji: '🔧', label: 'UTILITY' },
-  owner:      { emoji: '👑', label: 'OWNER' },
+  general:    { emoji: '🏠', label: 'General' },
+  ai:         { emoji: '🤖', label: 'Artificial Intelligence' },
+  downloader: { emoji: '⬇️',  label: 'Downloader' },
+  search:     { emoji: '🔍', label: 'Search' },
+  converter:  { emoji: '🔄', label: 'Converter' },
+  sticker:    { emoji: '🎨', label: 'Sticker & Image' },
+  group:      { emoji: '👥', label: 'Group Tools' },
+  moderation: { emoji: '🛡️',  label: 'Moderation' },
+  fun:        { emoji: '😂', label: 'Fun' },
+  games:      { emoji: '🎯', label: 'Games' },
+  economy:    { emoji: '💰', label: 'Economy' },
+  audio:      { emoji: '🎵', label: 'Audio Effects' },
+  utility:    { emoji: '🔧', label: 'Utility' },
+  owner:      { emoji: '👑', label: 'Owner' },
 };
 
-// ── Build full overview menu ──────────────────────────────
+// ─────────────────────────────────────────────────────────
+// PREMIUM MAIN MENU
+// ─────────────────────────────────────────────────────────
 function buildMainMenu(cfg, allCmds, catReg, catOrder) {
-  const prefix  = cfg?.prefix   || '.';
-  const botName = cfg?.name     || 'OLASUBOMI-MD';
-  const version = PKG_VERSION;
+  const prefix  = cfg?.prefix    || '.';
+  const botName = cfg?.name      || 'OLASUBOMI-MD';
   const owner   = cfg?.ownerName || 'Olasubomi';
-  const mode    = (cfg?.mode    || 'private').charAt(0).toUpperCase() +
-                  (cfg?.mode    || 'private').slice(1);
+  const mode    = cfg?.mode      || 'private';
   const total   = allCmds ? Object.keys(allCmds).length : 0;
-  const ping    = _lastPing != null ? `${_lastPing}ms` : '—';
+  const ping    = pingLabel(_lastPing);
+  const uptime  = getUptime();
+  const now     = new Date().toLocaleString('en-US', {
+    hour: '2-digit', minute: '2-digit', hour12: true,
+    day:  '2-digit', month: 'short', year: 'numeric'
+  });
 
-  // Header
   let out =
-    `╔══════════════════════════════╗\n` +
-    `║    🤖  *${botName}*    ║\n` +
-    `╚══════════════════════════════╝\n\n` +
-    `┌──────────────────────────────┐\n` +
-    `│  👑 Owner    : ${owner}\n` +
-    `│  🔖 Prefix   : ${prefix}\n` +
-    `│  🔒 Mode     : ${mode}\n` +
-    `│  🏷️  Version  : v${version}\n` +
-    `│  📦 Commands : ${total}\n` +
-    `│  ⏱️  Uptime   : ${getUptime()}\n` +
-    `│  🚀 Speed    : ${ping}\n` +
-    `└──────────────────────────────┘\n\n`;
+    `╭━━━━━━━━━━━━━━━━━━━━━━━━━━━╮\n` +
+    `┃  🤖  *${botName}*\n` +
+    `┃  ─────────────────────────\n` +
+    `┃  👑  Owner    »  ${owner}\n` +
+    `┃  🔖  Prefix   »  [ ${prefix} ]\n` +
+    `┃  🔒  Mode     »  ${mode.charAt(0).toUpperCase() + mode.slice(1)}\n` +
+    `┃  🏷️   Version  »  v${PKG_VERSION}\n` +
+    `┃  📦  Commands »  ${total} loaded\n` +
+    `┃  ⏱️   Uptime   »  ${uptime}\n` +
+    `┃  🚀  Ping     »  ${ping}\n` +
+    `┃  🕐  Time     »  ${now}\n` +
+    `╰━━━━━━━━━━━━━━━━━━━━━━━━━━━╯\n\n`;
 
-  // Category previews
+  // Category list
   const order = catOrder || Object.keys(catReg);
-  for (const cat of order) {
-    const cmds = catReg[cat];
-    if (!cmds || !cmds.length) continue;
-    const meta  = CATEGORY_META[cat] || { emoji: '•', label: cat.toUpperCase() };
-    // Preview: up to 8 commands joined with dots
-    const preview = cmds.slice(0, 8).map(c => `${prefix}${c}`).join('  ');
-    const more    = cmds.length > 8 ? ` +${cmds.length - 8} more` : '';
+  const cats  = order.filter(c => catReg[c]?.length);
+
+  for (let i = 0; i < cats.length; i++) {
+    const cat    = cats[i];
+    const cmds   = catReg[cat] || [];
+    const meta   = CATEGORY_META[cat] || { emoji: '•', label: cat };
+    const count  = cmds.length;
+    const isLast = i === cats.length - 1;
+
+    // Show up to 5 commands as a preview row
+    const preview = cmds.slice(0, 5).map(c => `\`${prefix}${c}\``).join('  ');
+    const more    = count > 5 ? `  _+${count - 5}_` : '';
+
     out +=
-      `*〔 ${meta.emoji} ${meta.label} 〕* _(${cmds.length})_\n` +
-      `${preview}${more}\n\n`;
+      `${isLast ? '╰' : '├'}─  ${meta.emoji}  *${meta.label}*  _(${count})_\n` +
+      `│    ${preview}${more}\n` +
+      (isLast ? '' : `│\n`);
   }
 
-  out += `_Type ${prefix}menu <category> for details · ${prefix}help <cmd> for info_`;
+  out +=
+    `\n> 💡 *${prefix}menu <category>*  ·  *${prefix}help <command>*`;
+
   return out;
 }
 
-// ── Build single-category menu ────────────────────────────
+// ─────────────────────────────────────────────────────────
+// PREMIUM CATEGORY MENU
+// ─────────────────────────────────────────────────────────
 function buildCategoryMenu(catKey, cfg, allCmds, catReg) {
   const meta   = CATEGORY_META[catKey];
   if (!meta) return null;
   const prefix = cfg?.prefix || '.';
   const cmds   = catReg[catKey];
-  if (!cmds || !cmds.length) return null;
+  if (!cmds?.length) return null;
 
   let out =
-    `╔══〔 ${meta.emoji} *${meta.label}* 〕══╗\n\n`;
+    `╭━━━━━━━━━━━━━━━━━━━━━━━━━━━╮\n` +
+    `┃  ${meta.emoji}  *${meta.label.toUpperCase()}*  _(${cmds.length} commands)_\n` +
+    `╰━━━━━━━━━━━━━━━━━━━━━━━━━━━╯\n\n`;
 
-  for (const name of cmds) {
-    const cmd  = allCmds[name];
-    const desc = cmd?.desc || '—';
-    out += `  ▸ *${prefix}${name}* — ${desc}\n`;
+  for (let i = 0; i < cmds.length; i++) {
+    const name   = cmds[i];
+    const cmd    = allCmds[name];
+    const desc   = cmd?.desc || '—';
+    const perm   = cmd?.permissions || 'all';
+    const lock   = perm === 'owner' ? ' 👑' : perm === 'admin' ? ' 🛡️' : '';
+    const isLast = i === cmds.length - 1;
+    out += `${isLast ? '╰' : '├'}  *${prefix}${name}*${lock}\n`;
+    out += `${isLast ? '  ' : '│'}   ↳ _${desc}_\n`;
+    if (!isLast) out += `│\n`;
   }
 
-  out +=
-    `\n╚══════════════════════════════╝\n` +
-    `_${prefix}help <command> for detailed info_`;
+  out += `\n> 💡 *${prefix}help <command>* for full usage details`;
   return out;
 }
 
-// ── Build .help <command> card ────────────────────────────
+// ─────────────────────────────────────────────────────────
+// HELP CARD
+// ─────────────────────────────────────────────────────────
 function buildHelpCard(name, cmd, cfg) {
-  const prefix = cfg?.prefix || '.';
-  const perm   = cmd.permissions || 'all';
-  const permLabel =
-    perm === 'owner' ? '👑 Owner only' :
-    perm === 'admin' ? '🛡️ Admins only' : '👥 All users';
-  const cat    = cmd.category ? (CATEGORY_META[cmd.category]?.label || cmd.category) : '—';
-  const usage  = cmd.usage   || `${prefix}${name}`;
-  const ex     = cmd.examples?.length ? cmd.examples.join('\n    ') : usage;
-  const aliases = cmd.aliases?.length ? cmd.aliases.join(', ') : '—';
+  const prefix    = cfg?.prefix || '.';
+  const perm      = cmd.permissions || 'all';
+  const permLabel = perm === 'owner' ? '👑 Owner only'
+                  : perm === 'admin' ? '🛡️  Admins only'
+                  : '👥 All users';
+  const cat       = cmd.category ? (CATEGORY_META[cmd.category]?.label || cmd.category) : '—';
+  const usage     = cmd.usage    || `${prefix}${name}`;
+  const aliases   = cmd.aliases?.length ? cmd.aliases.join(', ') : '—';
+  const examples  = cmd.examples?.length ? cmd.examples.join('\n  ↳ ') : usage;
 
   return (
-    `┏━━〔 📖 *HELP: ${prefix}${name}* 〕━━┓\n` +
-    `┃  📝 Desc    : ${cmd.desc || '—'}\n` +
-    `┃  🔧 Usage   : ${usage}\n` +
-    `┃  📂 Category: ${cat}\n` +
-    `┃  👥 Access  : ${permLabel}\n` +
-    `┃  🔗 Aliases : ${aliases}\n` +
-    `┃  💡 Example :\n` +
-    `┃    ${ex}\n` +
-    `┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛`
+    `╭━━━━━━━━━━━━━━━━━━━━━━━━━━━╮\n` +
+    `┃  📖  *${prefix}${name}*\n` +
+    `╰━━━━━━━━━━━━━━━━━━━━━━━━━━━╯\n` +
+    `\n` +
+    `📝  *Description*\n` +
+    `  ${cmd.desc || '—'}\n` +
+    `\n` +
+    `🔧  *Usage*\n` +
+    `  ${usage}\n` +
+    `\n` +
+    `💡  *Examples*\n` +
+    `  ↳ ${examples}\n` +
+    `\n` +
+    `🗂️   *Category*   »  ${cat}\n` +
+    `🔗  *Aliases*    »  ${aliases}\n` +
+    `🔒  *Access*     »  ${permLabel}`
   );
 }
 
-// ── Commands ──────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────
+// COMMANDS
+// ─────────────────────────────────────────────────────────
 const mainCommands = {
 
   menu: {
     category:    'general',
-    desc:        'Show full menu or a specific category',
+    desc:        'Show the full command menu or a specific category',
     usage:       '.menu [category]',
-    aliases:     ['help'],
+    aliases:     [],
     permissions: 'all',
-    examples:    ['.menu', '.menu ai', '.menu group'],
+    examples:    ['.menu', '.menu ai', '.menu group', '.menu owner'],
     exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
       const { categoryRegistry: catReg, CATEGORY_ORDER: catOrder } = require('./index');
       const allCmds = require('./index');
@@ -156,7 +196,7 @@ const mainCommands = {
         if (!CATEGORY_META[catKey]) {
           const available = Object.keys(CATEGORY_META).join(', ');
           return sock.sendMessage(jid, {
-            text: `❌ Unknown category: *${catKey}*\n\nAvailable:\n${available}`
+            text: `❌ Unknown category: *${catKey}*\n\nAvailable categories:\n${available}`
           });
         }
         const page = buildCategoryMenu(catKey, cfg, allCmds, catReg);
@@ -179,7 +219,7 @@ const mainCommands = {
     usage:       '.help <command>',
     aliases:     [],
     permissions: 'all',
-    examples:    ['.help gpt', '.help tagall'],
+    examples:    ['.help gpt', '.help tagall', '.help warn'],
     exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
       const allCmds = require('./index');
       const cfg     = botConfig || global.botConfig;
@@ -189,21 +229,21 @@ const mainCommands = {
       if (!name) {
         return sock.sendMessage(jid, {
           text:
-            `┏━━〔 🤖 *OLASUBOMI-MD Help* 〕━━┓\n` +
-            `┃  Use *${prefix}* before every command.\n` +
-            `┃\n` +
-            `┃  ${prefix}menu           — Full command menu\n` +
-            `┃  ${prefix}menu ai        — AI commands\n` +
-            `┃  ${prefix}menu group     — Group commands\n` +
-            `┃  ${prefix}help <cmd>     — Command details\n` +
-            `┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛`
+            `╭━━━━━━━━━━━━━━━━━━━━━━━━━━━╮\n` +
+            `┃  🤖  *OLASUBOMI-MD Help*\n` +
+            `╰━━━━━━━━━━━━━━━━━━━━━━━━━━━╯\n` +
+            `\n` +
+            `├  *${prefix}menu*           — Full command list\n` +
+            `├  *${prefix}menu ai*        — AI commands\n` +
+            `├  *${prefix}menu group*     — Group commands\n` +
+            `╰  *${prefix}help <cmd>*     — Command details`
         });
       }
 
       const cmd = allCmds[name];
       if (!cmd) {
         return sock.sendMessage(jid, {
-          text: `❌ Command *${prefix}${name}* not found.\n\nType *${prefix}menu* to see all commands.`
+          text: `❌ Command *${prefix}${name}* not found.\n\nType *${prefix}menu* to browse all commands.`
         });
       }
 
@@ -213,30 +253,36 @@ const mainCommands = {
 
   ping: {
     category:    'general',
-    desc:        'Check bot response time',
+    desc:        'Check bot response speed and status',
     usage:       '.ping',
     aliases:     ['speed'],
     permissions: 'all',
     examples:    ['.ping'],
     exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
-      const t0 = Date.now();
-      await sock.sendMessage(jid, { text: '🏓 Pinging...' });
-      _lastPing = Date.now() - t0;
-      const version = (botConfig?.version) || PKG_VERSION;
+      const t0   = Date.now();
+      const sent = await sock.sendMessage(jid, { text: '🏓 ...' });
+      _lastPing  = Date.now() - t0;
+      const version = botConfig?.version || PKG_VERSION;
+      const mem     = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
+      const mode    = (botConfig || global.botConfig)?.mode || 'private';
       await sock.sendMessage(jid, {
         text:
-          `┏━━〔 🤖 *OLASUBOMI-MD* 〕━━┓\n` +
-          `┃  🚀 Ping    : *${_lastPing} ms*\n` +
-          `┃  ⏱️  Uptime  : *${getUptime()}*\n` +
-          `┃  🔖 Version : *v${version}*\n` +
-          `┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛`
+          `╭━━━━━━━━━━━━━━━━━━━━━━━━━━━╮\n` +
+          `┃  🤖  *OLASUBOMI-MD*\n` +
+          `┃  ─────────────────────────\n` +
+          `┃  🚀  Ping     »  ${pingLabel(_lastPing)}\n` +
+          `┃  ⏱️   Uptime   »  ${getUptime()}\n` +
+          `┃  💾  Memory   »  ${mem} MB\n` +
+          `┃  🔒  Mode     »  ${mode.charAt(0).toUpperCase() + mode.slice(1)}\n` +
+          `┃  🏷️   Version  »  v${version}\n` +
+          `╰━━━━━━━━━━━━━━━━━━━━━━━━━━━╯`
       });
     }
   },
 
   alive: {
     category:    'general',
-    desc:        'Check if bot is online',
+    desc:        'Check if the bot is online',
     usage:       '.alive',
     aliases:     ['on'],
     permissions: 'all',
@@ -244,12 +290,14 @@ const mainCommands = {
     exec: async (args, sock, jid) => {
       await sock.sendMessage(jid, {
         text:
-          `┏━━〔 ✅ *Bot Status* 〕━━┓\n` +
-          `┃  🟢 Online\n` +
-          `┃  📅 ${new Date().toLocaleString()}\n` +
-          `┃  ⏱️  Uptime : ${getUptime()}\n` +
-          `┃  🔖 Version: v${PKG_VERSION}\n` +
-          `┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛`
+          `╭━━━━━━━━━━━━━━━━━━━━━━━━━━━╮\n` +
+          `┃  ✅  *Bot is Online*\n` +
+          `┃  ─────────────────────────\n` +
+          `┃  🟢  Status   »  Active\n` +
+          `┃  ⏱️   Uptime   »  ${getUptime()}\n` +
+          `┃  🏷️   Version  »  v${PKG_VERSION}\n` +
+          `┃  🕐  Time     »  ${new Date().toLocaleTimeString()}\n` +
+          `╰━━━━━━━━━━━━━━━━━━━━━━━━━━━╯`
       });
     }
   },
@@ -258,17 +306,19 @@ const mainCommands = {
     category:    'general',
     desc:        'Show how long the bot has been running',
     usage:       '.uptime',
-    aliases:     ['runtime'],
+    aliases:     [],
     permissions: 'all',
     examples:    ['.uptime'],
     exec: async (args, sock, jid) => {
-      await sock.sendMessage(jid, { text: `⏱️ *Uptime:* ${getUptime()}` });
+      await sock.sendMessage(jid, {
+        text: `⏱️  *Uptime:* ${getUptime()}`
+      });
     }
   },
 
   status: {
     category:    'utility',
-    desc:        'Full bot status report',
+    desc:        'Full bot status and database report',
     usage:       '.status',
     aliases:     [],
     permissions: 'all',
@@ -280,16 +330,19 @@ const mainCommands = {
       const total = Object.keys(require('./index')).length;
       await sock.sendMessage(jid, {
         text:
-          `┏━━〔 🟢 *Bot Status* 〕━━┓\n` +
-          `┃  ✅ Online\n` +
-          `┃  ⏱️  Uptime    : ${getUptime()}\n` +
-          `┃  💾 Memory    : ${mem} MB\n` +
-          `┃  👤 Mode      : ${cfg.mode || 'private'}\n` +
-          `┃  📦 Commands  : ${total}\n` +
-          `┃  🧑 Users     : ${stats.users}\n` +
-          `┃  👥 Groups    : ${stats.groups}\n` +
-          `┃  🚫 Banned    : ${stats.banned}\n` +
-          `┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛`
+          `╭━━━━━━━━━━━━━━━━━━━━━━━━━━━╮\n` +
+          `┃  🟢  *Bot Status*\n` +
+          `┃  ─────────────────────────\n` +
+          `┃  ⏱️   Uptime    »  ${getUptime()}\n` +
+          `┃  🚀  Ping      »  ${pingLabel(_lastPing)}\n` +
+          `┃  💾  Memory    »  ${mem} MB\n` +
+          `┃  🔒  Mode      »  ${cfg.mode || 'private'}\n` +
+          `┃  📦  Commands  »  ${total}\n` +
+          `┃  ─────────────────────────\n` +
+          `┃  👤  Users     »  ${stats.users}\n` +
+          `┃  👥  Groups    »  ${stats.groups}\n` +
+          `┃  🚫  Banned    »  ${stats.banned}\n` +
+          `╰━━━━━━━━━━━━━━━━━━━━━━━━━━━╯`
       });
     }
   }
