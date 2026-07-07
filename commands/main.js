@@ -38,20 +38,20 @@ function memStr() {
 
 // ── Category display metadata ─────────────────────────────
 const CATEGORY_META = {
-  general:    { label: 'GENERAL' },
-  ai:         { label: 'AI' },
-  downloader: { label: 'DOWNLOAD' },
-  search:     { label: 'SEARCH' },
-  converter:  { label: 'CONVERTER' },
-  sticker:    { label: 'TOOLS' },
-  group:      { label: 'GROUP' },
-  moderation: { label: 'ADMIN' },
-  fun:        { label: 'FUN' },
-  games:      { label: 'GAMES' },
-  economy:    { label: 'ECONOMY' },
-  audio:      { label: 'AUDIO' },
-  utility:    { label: 'UTILITY' },
-  owner:      { label: 'OWNER' },
+  general:    { emoji: '🌐', label: 'General' },
+  ai:         { emoji: '🤖', label: 'AI' },
+  downloader: { emoji: '⬇️',  label: 'Downloader' },
+  search:     { emoji: '🔍', label: 'Search' },
+  converter:  { emoji: '🔄', label: 'Converter' },
+  sticker:    { emoji: '🎨', label: 'Tools' },
+  group:      { emoji: '👥', label: 'Group' },
+  moderation: { emoji: '🛡️',  label: 'Admin' },
+  fun:        { emoji: '😄', label: 'Fun' },
+  games:      { emoji: '🎮', label: 'Games' },
+  economy:    { emoji: '💰', label: 'Economy' },
+  audio:      { emoji: '🎵', label: 'Audio' },
+  utility:    { emoji: '🔧', label: 'Utility' },
+  owner:      { emoji: '👑', label: 'Owner' },
 };
 
 // ── Permission label helper ───────────────────────────────
@@ -201,7 +201,7 @@ const mainCommands = {
       }
 
       const text = buildMainMenu(cfg, allCmds, catReg, catOrder);
-      await sock.sendMessage(jid, { text });
+      await sendMenu(sock, jid, text);
     }
   },
 
