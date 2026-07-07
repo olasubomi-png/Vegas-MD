@@ -31,7 +31,8 @@ const {
   handleAutoReact
 } = require('./events/protection');
 const { handleStatusUpdate } = require('./events/autoStatus');
-const allCommands = require('./commands/index');
+const allCommands    = require('./commands/index');
+const sessionManager = require('./lib/sessionManager');
 
 // ─── Bot configuration ────────────────────────────────────
 const botConfig = {
@@ -691,5 +692,16 @@ console.log('🚀 Starting OLASUBOMI-MD...');
   } catch (err) {
     console.warn(`[WA] Could not pre-fetch WA version: ${err.message} — will retry inside connect()`);
   }
+
+  // ── Expose handleCommand globally so sessionManager can route secondary sessions ──
+  global._smHandleCommand = handleCommand;
+
+  // ── Start primary session ──────────────────────────────────────────────────
   connect().catch(err => console.error('[startup] Fatal:', err.message));
+
+  // ── Resume any previously saved secondary sessions ─────────────────────────
+  sessionManager.init(handleCommand);
+  sessionManager.loadSavedSessions().catch(err =>
+    console.error('[startup] sessionManager.loadSavedSessions error:', err.message)
+  );
 })();

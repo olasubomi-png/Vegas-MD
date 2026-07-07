@@ -348,6 +348,61 @@ const ownerCommands = {
         text: `🔌 *Loaded Commands* — Total: ${total}\n\n${sorted}`
       });
     })
+  },
+
+  sessions: {
+    category: 'owner', desc: 'List all active secondary bot sessions',
+    usage: '.sessions', aliases: ['listsessions'], permissions: 'owner',
+    examples: ['.sessions'],
+    exec: ownerOnly(async (args, sock, jid, isGroup, sender, message, botConfig) => {
+      const sessionManager = require('../lib/sessionManager');
+      const list = sessionManager.listSessions();
+      const primaryNum = (botConfig?.ownerNumber || global.botConfig?.ownerNumber || '').replace(/\D/g, '');
+
+      let text =
+        `┏━━〔 📱 *Active Sessions* 〕━━┓\n` +
+        `┃\n` +
+        `┃ 🟢 *Primary* : +${primaryNum || 'unknown'} (always on)\n`;
+
+      if (!list.length) {
+        text += `┃\n┃ No secondary sessions.\n`;
+      } else {
+        for (const s of list) {
+          const icon = s.connected ? '🟢' : s.pairing ? '🟡' : '🔴';
+          const status = s.connected ? 'Connected' : s.pairing ? 'Pairing…' : 'Disconnected';
+          text += `┃ ${icon} *Secondary* : +${s.phoneNumber} — ${status}\n`;
+        }
+      }
+
+      text +=
+        `┃\n` +
+        `┃ *.pair <number>*   — Add a number\n` +
+        `┃ *.unpair <number>* — Remove a number\n` +
+        `┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛`;
+
+      await sock.sendMessage(jid, { text });
+    })
+  },
+
+  unpair: {
+    category: 'owner', desc: 'Remove a secondary session / disconnect a paired number',
+    usage: '.unpair <number>', aliases: ['removesession'], permissions: 'owner',
+    examples: ['.unpair 2349112097911'],
+    exec: ownerOnly(async (args, sock, jid) => {
+      const raw    = (args[0] || '').replace(/\D/g, '');
+      if (!raw) {
+        return sock.sendMessage(jid, {
+          text: `Usage: *.unpair <number>*\nExample: *.unpair 2349112097911*\n\nUse *.sessions* to see active sessions.`
+        });
+      }
+      const sessionManager = require('../lib/sessionManager');
+      const removed = sessionManager.removeSession(raw);
+      await sock.sendMessage(jid, {
+        text: removed
+          ? `✅ Session *+${raw}* has been removed and disconnected.`
+          : `❌ No active session found for *+${raw}*.\n\nUse *.sessions* to see active sessions.`
+      });
+    })
   }
 };
 

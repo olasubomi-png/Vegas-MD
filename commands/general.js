@@ -29,7 +29,7 @@ const generalCommands = {
   // e.g.:   .pair 2349112097911
   pair: {
     category:    'owner',
-    desc:        'Generate a pairing code for a phone number',
+    desc:        'Add a new WhatsApp number as a secondary bot session',
     usage:       '.pair <number>',
     aliases:     [],
     permissions: 'owner',
@@ -41,36 +41,31 @@ const generalCommands = {
       if (!number) {
         return sock.sendMessage(jid, {
           text:
-            `📱 *Pairing Code Generator*\n\n` +
+            `📱 *Multi-Session Pairing*\n\n` +
             `Usage: *.pair <number>*\n\n` +
             `Example:\n  *.pair 2349112097911*\n\n` +
-            `_Include country code, no + or spaces._`
+            `_Include country code, no + or spaces._\n` +
+            `_The pairing code will be sent here._`
         });
       }
 
-      await sock.sendMessage(jid, { text: `⏳ Generating pairing code for *+${number}*...` });
+      await sock.sendMessage(jid, {
+        text: `⏳ Starting new session for *+${number}*...\nThe pairing code will appear here shortly.`
+      });
 
       try {
-        const code = await sock.requestPairingCode(number);
-        await sock.sendMessage(jid, {
-          text:
-            `┏━━〔 📱 *Pairing Code* 〕━━┓\n` +
-            `┃\n` +
-            `┃  📞 Number : +${number}\n` +
-            `┃  🔑 Code   : *${code}*\n` +
-            `┃\n` +
-            `┃  *Steps to link:*\n` +
-            `┃  1️⃣ Open WhatsApp on the phone\n` +
-            `┃  2️⃣ Settings → Linked Devices\n` +
-            `┃  3️⃣ Link a Device → Enter code above\n` +
-            `┃\n` +
-            `┃  ⏳ Code expires in ~60 seconds\n` +
-            `┃\n` +
-            `┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛`
-        });
+        const sessionManager = require('../lib/sessionManager');
+        const result = await sessionManager.addSession(number, { notifyJid: jid, primarySock: sock });
+
+        if (result.alreadyConnected) {
+          await sock.sendMessage(jid, {
+            text: `✅ *+${number}* is already connected as a secondary session.`
+          });
+        }
+        // Pairing code is sent automatically by sessionManager when the QR fires
       } catch (err) {
         await sock.sendMessage(jid, {
-          text: `❌ *Failed to generate pairing code*\n\n${err.message}\n\n_Make sure the number is correct (country code + digits only)._`
+          text: `❌ *Failed to start session for +${number}*\n\n${err.message}`
         });
       }
     }
