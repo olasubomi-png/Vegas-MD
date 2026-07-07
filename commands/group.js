@@ -2,6 +2,22 @@
 // commands/group.js — Group management + protection toggles
 const db = require('../lib/database');
 const { getMentionedJid, isGroupAdmin, normalizeJid, toggleEmoji, resolveIsOwner } = require('../lib/helpers');
+const { downloadMediaMessage } = require('baileys');
+
+// Helper: pull contextInfo from any message type (Baileys v7)
+function getCtx(message) {
+  const msg = message?.message;
+  if (!msg) return null;
+  return (
+    msg.extendedTextMessage?.contextInfo ||
+    msg.imageMessage?.contextInfo        ||
+    msg.videoMessage?.contextInfo        ||
+    msg.audioMessage?.contextInfo        ||
+    msg.stickerMessage?.contextInfo      ||
+    msg.documentMessage?.contextInfo     ||
+    null
+  );
+}
 
 async function requireAdmin(sock, jid, isGroup, sender, message, botConfig) {
   if (!isGroup) {
@@ -256,17 +272,58 @@ const groupCommands = {
     }
   },
 
-  setpp: {
+  // .setgpp — set GROUP profile picture (distinct from .setpp which sets the BOT's picture)
+  setgpp: {
     category: 'group', desc: 'Change the group profile picture (reply to an image)',
-    usage: '.setpp', aliases: [], permissions: 'admin',
-    examples: ['.setpp (reply to an image)'],
+    usage: '.setgpp', aliases: ['gcpp'], permissions: 'admin',
+    examples: ['.setgpp (reply to an image)'],
     exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
       if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
-      const quoted = message.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+      const ctx    = getCtx(message);
+      const quoted = ctx?.quotedMessage;
       if (!quoted?.imageMessage) {
-        return sock.sendMessage(jid, { text: '🖼️ Reply to an *image* with *.setpp* to set it as the group picture.' });
+        return sock.sendMessage(jid, { text: '🖼️ *Set Group Picture*\n\nReply to an *image* with *.setgpp* to set it as the group profile picture.' });
       }
-      await sock.sendMessage(jid, { text: `🖼️ Setting group profile picture...\n\n_Requires downloading the image. Coming soon._` });
+      await sock.sendMessage(jid, { text: `🖼️ Updating group profile picture...` });
+      try {
+        const fakeMsg = {
+          key:     { remoteJid: jid, id: ctx.stanzaId || message.key.id, participant: ctx.participant, fromMe: false },
+          message: quoted
+        };
+        const buffer = await downloadMediaMessage(fakeMsg, 'buffer', { reuploadRequest: sock.updateMediaMessage });
+        await sock.updateProfilePicture(jid, buffer);
+        await sock.sendMessage(jid, { text: `✅ *Group profile picture updated!*` });
+      } catch (err) {
+        await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
+      }
+    }
+  },
+
+  // .delete — delete a replied-to message from the chat
+  delete: {
+    category: 'group', desc: 'Delete a replied message',
+    usage: '.delete', aliases: ['del'], permissions: 'admin',
+    examples: ['.delete (reply to the message you want to delete)'],
+    exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
+      if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
+      const ctx = getCtx(message);
+      if (!ctx?.stanzaId) {
+        return sock.sendMessage(jid, { text: '🗑️ *Delete Message*\n\nReply to the message you want to delete with *.delete*.' });
+      }
+      try {
+        // Delete the target message
+        const targetKey = {
+          remoteJid:   jid,
+          id:          ctx.stanzaId,
+          participant: ctx.participant || undefined,
+          fromMe:      false
+        };
+        await sock.sendMessage(jid, { delete: targetKey });
+        // Also clean up the .delete command message itself
+        await sock.sendMessage(jid, { delete: message.key });
+      } catch (err) {
+        await sock.sendMessage(jid, { text: `❌ Failed to delete: ${err.message}` });
+      }
     }
   },
 

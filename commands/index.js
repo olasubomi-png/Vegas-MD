@@ -7,11 +7,13 @@ const path = require('path');
 const allCommands      = {};
 const categoryRegistry = {}; // { catKey: string[] }
 
-// Display order for categories in the menu
+// Display order for categories in the menu — matches SIGMA-MD layout:
+// ADMIN, AI, AUDIO, DOWNLOAD, FUN, GAMES, GROUP, GENERAL, ECONOMY,
+// OWNER, SEARCH, CONVERTER, TOOLS, UTILITY
 const CATEGORY_ORDER = [
-  'general', 'ai', 'downloader', 'search', 'converter',
-  'sticker', 'group', 'moderation', 'fun', 'games',
-  'economy', 'audio', 'utility', 'owner'
+  'moderation', 'ai', 'audio', 'downloader', 'fun', 'games',
+  'group', 'general', 'economy', 'owner', 'search', 'converter',
+  'sticker', 'utility'
 ];
 
 function register(mod, sourceLabel) {

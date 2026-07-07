@@ -6,3 +6,8 @@ expertMode = true
 channel = "stable-25_05"
 
 [workflows]
+
+[userenv]
+
+[userenv.shared]
+OWNER_NUMBER = "2349112097911"

@@ -38,20 +38,20 @@ function memStr() {
 
 // ── Category display metadata ─────────────────────────────
 const CATEGORY_META = {
-  general:    { emoji: '🏠', label: 'General' },
-  ai:         { emoji: '🤖', label: 'AI' },
-  downloader: { emoji: '⬇️',  label: 'Downloader' },
-  search:     { emoji: '🔍', label: 'Search' },
-  converter:  { emoji: '🔄', label: 'Converter' },
-  sticker:    { emoji: '🎨', label: 'Sticker & Image' },
-  group:      { emoji: '👥', label: 'Group' },
-  moderation: { emoji: '🛡️',  label: 'Moderation' },
-  fun:        { emoji: '😂', label: 'Fun' },
-  games:      { emoji: '🎯', label: 'Games' },
-  economy:    { emoji: '💰', label: 'Economy' },
-  audio:      { emoji: '🎵', label: 'Audio' },
-  utility:    { emoji: '🔧', label: 'Utility' },
-  owner:      { emoji: '👑', label: 'Owner' },
+  general:    { label: 'GENERAL' },
+  ai:         { label: 'AI' },
+  downloader: { label: 'DOWNLOAD' },
+  search:     { label: 'SEARCH' },
+  converter:  { label: 'CONVERTER' },
+  sticker:    { label: 'TOOLS' },
+  group:      { label: 'GROUP' },
+  moderation: { label: 'ADMIN' },
+  fun:        { label: 'FUN' },
+  games:      { label: 'GAMES' },
+  economy:    { label: 'ECONOMY' },
+  audio:      { label: 'AUDIO' },
+  utility:    { label: 'UTILITY' },
+  owner:      { label: 'OWNER' },
 };
 
 // ── Permission label helper ───────────────────────────────
@@ -61,13 +61,8 @@ function permLabel(perm) {
   return 'User';
 }
 
-// ── Pad string to fixed width (ASCII-safe) ────────────────
-function pad(str, len) {
-  return str.length >= len ? str : str + ' '.repeat(len - str.length);
-}
-
 // ─────────────────────────────────────────────────────────
-// PREMIUM MAIN MENU
+// SIGMA-MD STYLE MAIN MENU
 // ─────────────────────────────────────────────────────────
 function buildMainMenu(cfg, allCmds, catReg, catOrder) {
   const prefix  = cfg?.prefix    || '.';
@@ -75,53 +70,45 @@ function buildMainMenu(cfg, allCmds, catReg, catOrder) {
   const owner   = cfg?.ownerName || 'Olasubomi';
   const mode    = cfg?.mode      || 'private';
   const total   = countCmds(allCmds);
-  const ping    = _lastPing != null ? `${_lastPing} ms` : '— ms';
-  const modeStr = mode.charAt(0).toUpperCase() + mode.slice(1);
+  const s       = Math.floor((Date.now() - (global.botStartTime || Date.now())) / 1000);
+  const h       = Math.floor(s / 3600);
+  const m       = Math.floor((s % 3600) / 60);
+  const sec     = s % 60;
+  const runtime = `${h}h ${m}m ${sec}s`;
 
-  // ── Header ────────────────────────────────────────────────
+  // ── Header (SIGMA-MD style) ───────────────────────────────
   let out =
-    `┏━━〔 🤖 *${botName}* 〕━━┓\n` +
-    `┃ 👑 Owner    : ${owner}\n` +
-    `┃ 🔖 Prefix   : ${prefix}\n` +
-    `┃ 🔒 Mode     : ${modeStr}\n` +
-    `┃ 🔖 Version  : v${PKG_VERSION}\n` +
-    `┃ 🚀 Ping     : ${ping}\n` +
-    `┃ ⏱️ Uptime   : ${getUptime()}\n` +
-    `┃ 💾 Memory   : ${memStr()}\n` +
-    `┃ 📦 Commands : ${total}\n` +
-    `┗━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n\n`;
+    `*╭┈───〔 ${botName} 〕┈───⊷*\n` +
+    `*├⬗ Owner:* ${owner}\n` +
+    `*├⬗ Commands:* ${total}\n` +
+    `*├⬗ Runtime:* ${runtime}\n` +
+    `*├⬗ Prefix:* ${prefix}\n` +
+    `*├⬗ Mode:* ${mode}\n` +
+    `*├⬗ Version:* ${PKG_VERSION} Bᴇᴛᴀ\n` +
+    `*╰───────────────────⊷*\n\n`;
 
-  // ── Category previews ─────────────────────────────────────
+  // ── Category blocks ───────────────────────────────────────
   const order = catOrder || Object.keys(catReg);
   const cats  = order.filter(c => catReg[c]?.length);
 
   for (const cat of cats) {
     const cmds  = catReg[cat] || [];
-    const meta  = CATEGORY_META[cat] || { emoji: '•', label: cat.charAt(0).toUpperCase() + cat.slice(1) };
-    const label = meta.label.toUpperCase();
-    const shown = cmds.slice(0, 5);
-    const extra = cmds.length - shown.length;
+    const meta  = CATEGORY_META[cat] || { label: cat.toUpperCase() };
 
-    out += `╭─${meta.emoji} *${label}* (${cmds.length})\n`;
-    for (let i = 0; i < shown.length; i++) {
-      const name  = shown[i];
-      const desc  = allCmds[name]?.desc || 'No description available.';
-      const isLast = i === shown.length - 1 && extra === 0;
-      const branch = isLast ? '└' : '├';
-      out += `${branch} ${pad(prefix + name, 14)} ${desc}\n`;
+    out += `\`『 ${meta.label} 』\`\n`;
+    out += `╭───────────────────⊷\n`;
+    for (const name of cmds) {
+      out += `*┋ ▸ ${name}*\n`;
     }
-    if (extra > 0) {
-      out += `└ ┄ _+${extra} more_ · *${prefix}menu ${cat}*\n`;
-    }
-    out += '\n';
+    out += `╰───────────────────⊷\n\n`;
   }
 
-  out += `> 💡 *${prefix}menu <category>*  ·  *${prefix}help <command>*`;
+  out += `> *© ᴘᴏᴡᴇʀᴇᴅ ʙʏ ${botName}*`;
   return out;
 }
 
 // ─────────────────────────────────────────────────────────
-// PREMIUM CATEGORY MENU
+// SIGMA-MD STYLE CATEGORY MENU
 // ─────────────────────────────────────────────────────────
 function buildCategoryMenu(catKey, cfg, allCmds, catReg) {
   const meta = CATEGORY_META[catKey];
@@ -130,28 +117,12 @@ function buildCategoryMenu(catKey, cfg, allCmds, catReg) {
   const cmds   = catReg[catKey];
   if (!cmds?.length) return null;
 
-  let out =
-    `┏━━〔 ${meta.emoji} *${meta.label.toUpperCase()} COMMANDS* 〕━━┓\n\n`;
-
-  for (let i = 0; i < cmds.length; i++) {
-    const name   = cmds[i];
-    const cmd    = allCmds[name];
-    const desc   = cmd?.desc    || 'No description available.';
-    const usage  = cmd?.usage   || `${prefix}${name}`;
-    const perm   = permLabel(cmd?.permissions);
-    const isLast = i === cmds.length - 1;
-    const branch = isLast ? '└' : '├';
-    const gutter = isLast ? ' ' : '│';
-
-    out += `${branch} *${prefix}${name}*\n`;
-    out += `${gutter}  ↳ ${desc}\n`;
-    out += `${gutter}  Usage: \`${usage}\`\n`;
-    out += `${gutter}  Permission: ${perm}\n`;
-    out += '\n';
+  let out = `\`『 ${meta.label} 』\`\n╭───────────────────⊷\n`;
+  for (const name of cmds) {
+    out += `*┋ ▸ ${name}*\n`;
   }
-
-  out += `┗━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n`;
-  out += `\n> 💡 *${prefix}help <command>* for full details`;
+  out += `╰───────────────────⊷\n\n`;
+  out += `> 💡 *${prefix}help <command>* for full details`;
   return out;
 }
 
@@ -166,8 +137,8 @@ function buildHelpCard(name, cmd, cfg) {
                   : '👥 All users';
   const cat       = cmd.category
     ? (CATEGORY_META[cmd.category]
-        ? `${CATEGORY_META[cmd.category].emoji} ${CATEGORY_META[cmd.category].label}`
-        : cmd.category)
+        ? CATEGORY_META[cmd.category].label
+        : cmd.category.toUpperCase())
     : '—';
   const usage     = cmd.usage   || `${prefix}${name}`;
   const aliases   = cmd.aliases?.length ? cmd.aliases.map(a => `${prefix}${a}`).join(', ') : '—';
