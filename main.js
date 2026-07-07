@@ -317,19 +317,32 @@ function attachHandlers(sock, saveCreds) {
 
         // ── REGISTERED — normal post-link reconnect logic ───────────────────
 
-        // 401 loggedOut: device was removed or session revoked on an already-
-        // linked account.  Now it IS safe to wipe stale credentials and start
-        // a fresh pairing-code flow.
-        if (statusCode === DisconnectReason.loggedOut) {
-          console.log('[WA] Logged out (401) after successful registration — clearing stale session...');
+        // Helper: wipe auth and start a fresh pairing flow
+        function wipAndRepair(reason) {
+          console.log(`[WA] ${reason} — clearing stale session and starting fresh pairing...`);
           try {
             fs.rmSync('auth_info_baileys', { recursive: true, force: true });
             console.log('[WA] auth_info_baileys/ cleared.');
           } catch (e) {
             console.error('[WA] Could not clear auth_info_baileys/:', e.message);
           }
-          console.log('[WA] Reconnecting in 3s with a fresh login (new pairing code)...');
           scheduleReconnect(3_000, { freshLogin: true });
+        }
+
+        // 401 loggedOut: device was removed or session revoked.
+        if (statusCode === DisconnectReason.loggedOut) {
+          wipAndRepair('Logged out (401) — session revoked or number removed');
+          return;
+        }
+
+        // 403 forbidden: number was banned by WhatsApp.
+        // The old session is permanently invalid — looping is pointless.
+        // Wipe auth_info_baileys/ and start a fresh pairing flow so the
+        // owner can link a new (unbanned) number without manual intervention.
+        if (statusCode === 403) {
+          console.log('[WA] ⚠  403 forbidden — the linked WhatsApp number has likely been banned.');
+          console.log('[WA]    The existing session is permanently invalid.');
+          wipAndRepair('Banned number (403)');
           return;
         }
 
