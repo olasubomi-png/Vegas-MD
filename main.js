@@ -46,8 +46,8 @@ const LOCK_FILE = '.bot.lock';
 //   • Counter auto-resets after PAIRING_COOLDOWN_MS (24 h) so the user can
 //     try again the next day without manual file deletion.
 const PAIRING_ATTEMPTS_FILE  = '.pairing_attempts.json';
-const MAX_PAIRING_FAILURES   = 3;
-const PAIRING_COOLDOWN_MS    = 24 * 60 * 60 * 1000; // 24 hours
+const MAX_PAIRING_FAILURES   = 10;                    // raised — enough retries to handle transient WA hiccups
+const PAIRING_COOLDOWN_MS    = 60 * 60 * 1000;       // 1 hour cooldown (was 24 h) for faster recovery
 
 // ── Safe parse: always returns a validated { count, firstAttemptAt } object ──
 // • `count` is coerced to a non-negative integer (NaN/non-numeric → 0).
@@ -430,7 +430,7 @@ function attachHandlers(sock, saveCreds) {
             console.log(`[WA]    Pairing failure #${failCount} of ${MAX_PAIRING_FAILURES} allowed.`);
 
             if (failCount >= MAX_PAIRING_FAILURES) {
-              printPairingSuspendedBanner(24);
+              printPairingSuspendedBanner(Math.max(1, Math.ceil(PAIRING_COOLDOWN_MS / 3_600_000)));
               process.exit(0); // PM2 will restart a few more times but exits immediately each time
               return;
             }
@@ -466,7 +466,9 @@ function attachHandlers(sock, saveCreds) {
 
         // ── REGISTERED — normal post-link reconnect logic ───────────────────
 
-        // Helper: wipe auth and start a fresh pairing flow
+        // Helper: wipe auth and start a fresh pairing flow.
+        // Also resets the pairing-attempts counter because a legitimate logout
+        // should always allow a clean re-pair — it is NOT a failed pairing attempt.
         function wipAndRepair(reason) {
           console.log(`[WA] ${reason} — clearing stale session and starting fresh pairing...`);
           try {
@@ -475,6 +477,8 @@ function attachHandlers(sock, saveCreds) {
           } catch (e) {
             console.error('[WA] Could not clear auth_info_baileys/:', e.message);
           }
+          resetPairingAttempts(); // fresh slate — don't count logout as a pairing failure
+          console.log('[WA] Pairing-attempts counter reset (clean logout, not a failure).');
           scheduleReconnect(3_000, { freshLogin: true });
         }
 
