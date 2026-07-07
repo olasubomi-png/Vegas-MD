@@ -166,27 +166,29 @@ function attachHandlers(sock, saveCreds) {
         const reasonName    = Object.keys(DisconnectReason).find(
                                 k => DisconnectReason[k] === statusCode
                               ) || statusCode;
-        // Do NOT reconnect if:
-        //   loggedOut (408)        — credentials revoked, reconnecting is pointless
-        //   connectionReplaced (440) — a newer process already holds the session;
-        //                             reconnecting here would kick THAT process,
-        //                             causing an infinite kick-loop between two instances
-        const noReconnectCodes = new Set([
-          DisconnectReason.loggedOut,           // 401
-          DisconnectReason.connectionReplaced,  // 440
-        ]);
-        const shouldReconnect = !noReconnectCodes.has(statusCode);
-
-        console.log(`[WA] Connection closed — ${reasonName}(${statusCode}), reconnect: ${shouldReconnect}`);
-
-        if (!shouldReconnect) {
-          if (statusCode === DisconnectReason.connectionReplaced) {
-            console.log('[WA] connectionReplaced — another instance took over. Stop this duplicate process.');
-          } else {
-            console.log('[WA] Logged out. Delete auth_info_baileys/ and restart.');
-          }
+        // connectionReplaced (440): another process already owns this session.
+        // Reconnecting would kick that process → infinite kick-loop. Stop here.
+        if (statusCode === DisconnectReason.connectionReplaced) {
+          console.log('[WA] connectionReplaced — another instance took over. Stopping this duplicate.');
           return;
         }
+
+        // loggedOut (401): credentials were revoked (device removed, re-registered, etc.).
+        // Wipe the stale session so the next connect() starts a fresh pairing-code flow.
+        if (statusCode === DisconnectReason.loggedOut) {
+          console.log('[WA] Logged out (401) — clearing stale session and starting fresh login...');
+          try {
+            fs.rmSync('auth_info_baileys', { recursive: true, force: true });
+            console.log('[WA] auth_info_baileys/ cleared.');
+          } catch (e) {
+            console.error('[WA] Could not clear auth_info_baileys/:', e.message);
+          }
+          console.log('[WA] Reconnecting in 3s to start new pairing-code flow...');
+          scheduleReconnect(3_000);
+          return;
+        }
+
+        console.log(`[WA] Connection closed — ${reasonName}(${statusCode}), reconnecting...`);
         const backoffMs = statusCode === 408 ? 15_000 : 5_000;
         console.log(`[WA] Reconnecting in ${backoffMs / 1000}s...`);
         scheduleReconnect(backoffMs);
