@@ -201,7 +201,7 @@ const mainCommands = {
       }
 
       const text = buildMainMenu(cfg, allCmds, catReg, catOrder);
-      await sendMenu(sock, jid, text);
+      await sock.sendMessage(jid, { text });
     }
   },
 
