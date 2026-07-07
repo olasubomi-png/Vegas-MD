@@ -28,6 +28,21 @@
       "autoStatus": false,
       "maxWarnings": 3,
       "muteLink": false
+    },
+    "120363420265954793": {
+      "id": "120363420265954793",
+      "welcome": false,
+      "goodbye": false,
+      "welcomeMsg": "👋 Welcome @user to *@group*! You are member #@count.",
+      "goodbyeMsg": "👋 *@user* has left the group.",
+      "antiLink": false,
+      "antiDelete": false,
+      "antiSpam": false,
+      "antiViewOnce": false,
+      "autoReact": false,
+      "autoStatus": false,
+      "maxWarnings": 3,
+      "muteLink": false
     }
   },
   "settings": {},
