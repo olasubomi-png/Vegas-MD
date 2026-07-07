@@ -231,9 +231,21 @@ function attachHandlers(sock, saveCreds) {
 
           cacheMessage(message);
 
-          if (message.key.fromMe) {
-            console.log('[WA] skipping: fromMe=true');
-            continue;
+          // ── fromMe handling ───────────────────────────────────────
+          // fromMe=true means the bot's own WhatsApp account sent this
+          // message.  Two cases:
+          //   a) Owner typed a command (.ping, .menu …) from their phone
+          //      → must reach handleCommand, treated as owner
+          //   b) Bot's own automatic reply (sock.sendMessage)
+          //      → will not start with the prefix, so prefix check below
+          //        discards it naturally — no explicit skip needed here
+          //
+          // Protection handlers (autoReact, antiViewOnce, antiLink,
+          // antiSpam) are skipped for fromMe — the bot's own messages
+          // must never trigger moderation.
+          const isFromMe = message.key.fromMe === true;
+          if (isFromMe) {
+            console.log('[WA] fromMe=true — owner command candidate, skipping protection handlers');
           }
 
           // Status updates
@@ -244,18 +256,20 @@ function attachHandlers(sock, saveCreds) {
             continue;
           }
 
-          // Banned users
-          if (db.isBanned(sender)) {
+          // Banned users (fromMe messages are never banned)
+          if (!isFromMe && db.isBanned(sender)) {
             console.log(`[WA] skipping: ${sender} is banned`);
             continue;
           }
 
-          await handleAutoReact(sock, message).catch(e =>
-            console.error('[handler] autoReact:', e.stack || e.message)
-          );
-          await handleAntiViewOnce(sock, message).catch(e =>
-            console.error('[handler] antiViewOnce:', e.stack || e.message)
-          );
+          if (!isFromMe) {
+            await handleAutoReact(sock, message).catch(e =>
+              console.error('[handler] autoReact:', e.stack || e.message)
+            );
+            await handleAntiViewOnce(sock, message).catch(e =>
+              console.error('[handler] antiViewOnce:', e.stack || e.message)
+            );
+          }
 
           // ── Extract text (single source of truth: lib/helpers.js) ──
           // getMessageText() unwraps ephemeral/view-once containers
@@ -267,7 +281,7 @@ function attachHandlers(sock, saveCreds) {
           const prefix = db.getSetting('prefix') || botConfig.prefix || '.';
           console.log(`[WA] active prefix: "${prefix}"`);
 
-          if (text && isJidGroup(jid)) {
+          if (!isFromMe && text && isJidGroup(jid)) {
             const blocked = await handleAntiLink(sock, message, botConfig).catch(e => {
               console.error('[handler] antiLink:', e.stack || e.message);
               return false;
@@ -389,6 +403,8 @@ async function handleCommand(command, args, message, sock, botConfig) {
   const sender    = message.key.participant || jid;
   const senderNum = normalizeJid(sender);
   const ownerNum  = normalizeJid(botConfig.ownerNumber);
+  // fromMe=true → the owner typed this from the bot's own device/account
+  const isFromMe  = message.key.fromMe === true;
 
   // Verify socket identity: handleCommand should always receive the live socket
   console.log(`[cmd] handleCommand entered — .${command} | sock#${sock?._id} currentSock#${currentSock?._id}`);
@@ -397,21 +413,25 @@ async function handleCommand(command, args, message, sock, botConfig) {
   console.log(`[cmd]   owner    : "${botConfig.ownerNumber}" → normalised: "${ownerNum}"`);
   console.log(`[cmd]   mode     : ${botConfig.mode}`);
   console.log(`[cmd]   isGroup  : ${isGroup}`);
+  console.log(`[cmd]   isFromMe : ${isFromMe}`);
 
   // ── Permission check: private mode ─────────────────────
   if (botConfig.mode === 'private') {
-    if (!ownerNum) {
+    if (isFromMe) {
+      // Message came from the bot's own account — always the owner
+      console.log('[cmd]   private mode: fromMe=true — auto-approved as owner');
+    } else if (!ownerNum) {
       console.log('[cmd]   private mode: OWNER_NUMBER not set — sending warning');
       return sock.sendMessage(jid, {
         text: '🔒 Bot is in *private mode* but OWNER_NUMBER is not set.\n\n' +
               'Add it as a Replit Secret to activate the bot.'
       });
-    }
-    if (senderNum !== ownerNum) {
+    } else if (senderNum !== ownerNum) {
       console.log(`[cmd]   private mode: BLOCKED — sender "${senderNum}" ≠ owner "${ownerNum}"`);
       return;
+    } else {
+      console.log('[cmd]   private mode: sender IS owner — allowed');
     }
-    console.log('[cmd]   private mode: sender IS owner — allowed');
   }
 
   // ── Command lookup ──────────────────────────────────────
@@ -427,7 +447,8 @@ async function handleCommand(command, args, message, sock, botConfig) {
   console.log(`[cmd]   command ".${command}" FOUND — exec type: ${typeof cmd.exec}`);
 
   // ── Inject helpers onto message ─────────────────────────
-  message._isOwner      = ownerNum ? senderNum === ownerNum : false;
+  // isFromMe qualifies as owner regardless of OWNER_NUMBER setting
+  message._isOwner      = isFromMe || (ownerNum ? senderNum === ownerNum : false);
   message._isGroupAdmin = isGroup
     ? () => isGroupAdmin(jid, sender)
     : async () => false;
