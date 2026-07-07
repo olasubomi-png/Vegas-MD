@@ -47,10 +47,18 @@ global.botConfig    = botConfig;
 global.db           = db;
 
 // ─── Socket state — one socket at a time ──────────────────
-let currentSock    = null;
-let isConnecting   = false;
-let reconnectTimer = null;
-let _sockSeq       = 0;   // monotonically increasing socket ID for identity tracing
+let currentSock          = null;
+let isConnecting         = false;
+let reconnectTimer       = null;
+let _sockSeq             = 0;   // monotonically increasing socket ID for identity tracing
+
+// ─── Pairing-code guard ───────────────────────────────────
+// Reset to false at the start of every connect() call so each
+// fresh socket gets exactly one pairing-code request.
+// Set to true after the first successful requestPairingCode().
+// Never reset while waiting for the user to link — doing so
+// would generate a second code and invalidate the first.
+let pairingCodeRequested = false;
 
 // ─────────────────────────────────────────────────────────
 // destroySocket — remove all listeners then close the WS
@@ -142,21 +150,63 @@ function attachHandlers(sock, saveCreds) {
     if (events['connection.update']) {
       const { connection, lastDisconnect, qr } = events['connection.update'];
 
+      // Always log every connection.update for full traceability.
+      const registered = sock.authState?.creds?.registered;
+      console.log(
+        `[WA] connection.update sock#${sockId}` +
+        ` — state: ${connection ?? '(none)'}` +
+        ` | registered: ${registered}` +
+        ` | hasQR: ${!!qr}` +
+        ` | pairingCodeRequested: ${pairingCodeRequested}`
+      );
+
+      // ── Pairing-code request: ONCE per socket, ONCE per connect() ──────
+      //
+      // ROOT CAUSE OF PREVIOUS FAILURE:
+      //   Baileys re-emits `qr` in connection.update every ~20-30 s while
+      //   waiting for a QR scan.  Without a guard, requestPairingCode() was
+      //   called on EVERY QR refresh — each call immediately invalidates the
+      //   previous code, so the user could never enter one in time.
+      //
+      // FIX: pairingCodeRequested is set to true after the first successful
+      //   call and is only reset in connect() (i.e. on a fresh socket).
+      //   Subsequent QR refreshes are logged and silently ignored so the
+      //   first code stays valid until the user links or the socket dies.
       if (qr) {
-        // Under PM2/non-TTY environments readline does not work.
-        // Read the number from the environment variable instead.
-        const phoneNumber = process.env.OWNER_NUMBER;
-        if (!phoneNumber) {
-          console.log('[WA] QR received but OWNER_NUMBER is not set — cannot request pairing code.');
-          console.log('[WA] Set OWNER_NUMBER (digits + country code) in your environment and restart.');
+        if (pairingCodeRequested) {
+          console.log(
+            '[WA] QR refresh — pairing code already requested for this socket.' +
+            ' Ignoring. Waiting for the user to link the device...'
+          );
         } else {
-          console.log(`[WA] QR received — requesting pairing code for ${phoneNumber}...`);
-          try {
-            const code = await sock.requestPairingCode(phoneNumber);
-            console.log(`\n📱 PAIRING CODE: ${code}`);
-            console.log('WhatsApp → Settings → Linked Devices → Link Device → Enter code\n');
-          } catch (err) {
-            console.error('[WA] Pairing code failed:', err.message);
+          // Phone number priority: Replit Secret → persisted db setting → fail clearly.
+          const phoneNumber = process.env.OWNER_NUMBER
+                           || db.getSetting('ownerNumber', null)
+                           || '';
+
+          if (!phoneNumber) {
+            console.log('[WA] ⚠  Cannot request pairing code — phone number not set.');
+            console.log('[WA]    Add OWNER_NUMBER as a Replit Secret (country code + digits,');
+            console.log('[WA]    no + or spaces, e.g. 2349061198658) then restart the bot.');
+          } else {
+            // Set flag BEFORE the async call so a concurrent QR event
+            // cannot race through the guard while we await the code.
+            pairingCodeRequested = true;
+            console.log(`[WA] Requesting pairing code for ${phoneNumber} (one-time per socket)...`);
+            try {
+              const code = await sock.requestPairingCode(phoneNumber);
+              console.log(`\n📱 PAIRING CODE: ${code}`);
+              console.log('    WhatsApp → Settings → Linked Devices → Link a Device → Enter code above');
+              console.log('    ⏳ Waiting for you to link. Do NOT restart the bot.\n');
+            } catch (err) {
+              console.error('[WA] Pairing code request failed:', err.message);
+              // Reset only on failure so a retry fires on the next QR refresh.
+              // On success pairingCodeRequested stays true forever for this socket:
+              // a second requestPairingCode() would invalidate the code the user
+              // is actively trying to enter.
+              pairingCodeRequested = false;
+              console.log('[WA] Will retry pairing code on next QR refresh...');
+            }
           }
         }
       }
@@ -360,7 +410,10 @@ async function connect() {
     return;
   }
   isConnecting = true;
-  console.log('[WA] connect() starting...');
+  // Reset per-socket pairing flag so every fresh connect() gets
+  // exactly one pairing-code attempt if creds are not registered.
+  pairingCodeRequested = false;
+  console.log('[WA] connect() starting — pairingCodeRequested reset to false');
 
   if (currentSock) {
     console.log('[WA] Destroying previous socket...');
@@ -372,6 +425,13 @@ async function connect() {
     // Ensure auth directory exists — prevents ENOENT on fresh deployments
     fs.mkdirSync('auth_info_baileys', { recursive: true });
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+
+    console.log(`[WA] Auth state loaded — creds.registered: ${state.creds.registered}`);
+    if (state.creds.registered) {
+      console.log('[WA] Existing credentials found — resuming session (no pairing code needed).');
+    } else {
+      console.log('[WA] No registered session — will request ONE pairing code when QR event fires.');
+    }
 
     const sock = createSocket(state);
     currentSock = sock;
