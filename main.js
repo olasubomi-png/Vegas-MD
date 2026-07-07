@@ -2,6 +2,33 @@
 require('dotenv').config();
 
 const fs = require('fs');
+
+// ─── Single-instance lock ─────────────────────────────────────────────────────
+// Prevents two PM2 processes from running simultaneously and fighting over
+// auth_info_baileys/, which causes duplicate pairing codes and "Couldn't link
+// device" errors.
+const LOCK_FILE = '.bot.lock';
+(function acquireLock() {
+  if (fs.existsSync(LOCK_FILE)) {
+    const pid = parseInt(fs.readFileSync(LOCK_FILE, 'utf8').trim(), 10);
+    if (pid && pid !== process.pid) {
+      try {
+        process.kill(pid, 0); // throws if process is dead
+        console.error(`[lock] Another instance is already running (PID ${pid}). Exiting.`);
+        process.exit(1);
+      } catch (_) {
+        // Stale lock — previous process is gone, safe to take over
+        console.warn(`[lock] Stale lock for PID ${pid} — taking over.`);
+      }
+    }
+  }
+  fs.writeFileSync(LOCK_FILE, String(process.pid));
+  // Remove lock on exit so a clean restart can start immediately
+  const releaseLock = () => { try { fs.unlinkSync(LOCK_FILE); } catch (_) {} };
+  process.on('exit',    releaseLock);
+  process.on('SIGINT',  () => { releaseLock(); process.exit(0); });
+  process.on('SIGTERM', () => { releaseLock(); process.exit(0); });
+})();
 const {
   default: makeWASocket,
   useMultiFileAuthState,
