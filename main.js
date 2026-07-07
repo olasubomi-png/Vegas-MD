@@ -20,7 +20,7 @@ const { handleStatusUpdate } = require('./events/autoStatus');
 const allCommands = require('./commands/index');
 require('dotenv').config();
 
-// ─── Bot configuration (immutable after startup) ──────────
+// ─── Bot configuration ────────────────────────────────────
 const botConfig = {
   name:        process.env.BOT_NAME   || 'OLASUBOMI-MD',
   version:     '3.0.0',
@@ -33,19 +33,16 @@ const botConfig = {
 };
 
 global.botStartTime = Date.now();
-global.botConfig    = botConfig;   // kept for legacy command reads only
+global.botConfig    = botConfig;
 global.db           = db;
 
-// ─── Socket state — single source of truth ────────────────
-//  Only `connect()` may write these variables.
-let currentSock    = null;   // THE live socket at any moment
-let isConnecting   = false;  // mutual-exclusion flag
-let reconnectTimer = null;   // pending setTimeout handle
+// ─── Socket state — one socket at a time ──────────────────
+let currentSock    = null;
+let isConnecting   = false;
+let reconnectTimer = null;
 
 // ─────────────────────────────────────────────────────────
-// 1. destroySocket(sock)
-//    Fully tears down a socket so its event emitter and WS
-//    connection cannot fire again.
+// destroySocket — remove all listeners then close the WS
 // ─────────────────────────────────────────────────────────
 function destroySocket(sock) {
   if (!sock) return;
@@ -54,182 +51,222 @@ function destroySocket(sock) {
 }
 
 // ─────────────────────────────────────────────────────────
-// 2. createSocket(state)
-//    Constructs and returns a bare Baileys socket.
-//    No listeners are attached here.
+// createSocket — construct Baileys socket with no listeners
+//
+// Key options explained:
+//   syncFullHistory: false
+//     Tells Baileys to skip the full history sync on first
+//     connection.  Without this, Baileys calls ev.buffer()
+//     and holds ALL events (including messages.upsert) frozen
+//     until the sync completes.  On accounts with many
+//     messages this can stall indefinitely.
+//
+//   getMessage: async () => undefined
+//     Required by Baileys for message-retry logic.
+//     Returning undefined is safe and matches the default.
 // ─────────────────────────────────────────────────────────
 function createSocket(state) {
   return makeWASocket({
-    auth:                  state,
-    printQRInTerminal:     false,
-    browser:               ['Ubuntu', 'Chrome', '121.0.6167.160'],
-    connectTimeoutMs:      60_000,   // allow slow handshakes
-    keepAliveIntervalMs:   25_000,   // ping every 25 s → prevents 408 idle drops
-    retryRequestDelayMs:   3_000,
-    maxMsListenerCount:    30,       // realistic ceiling; high values mask leaks
+    auth:                state,
+    printQRInTerminal:   false,
+    browser:             ['Ubuntu', 'Chrome', '121.0.6167.160'],
+    connectTimeoutMs:    60_000,
+    keepAliveIntervalMs: 25_000,
+    retryRequestDelayMs: 250,
+    maxMsListenerCount:  50,
+    // ── CRITICAL FIX #1 ───────────────────────────────────
+    // Skip full history sync so the event buffer is never held
+    // open waiting for a sync notification that may never come.
+    syncFullHistory:     false,
+    // Provide a getMessage fallback so retry logic never throws
+    getMessage:          async () => undefined,
   });
 }
 
 // ─────────────────────────────────────────────────────────
-// 3. attachHandlers(sock, saveCreds)
-//    Registers EVERY event listener on the socket that is
-//    passed in.  All closures capture THIS local `sock`
-//    variable — they never read `currentSock` or any other
-//    outer mutable reference.  If the socket is replaced,
-//    these listeners become inert because the old socket's
-//    ev emitter is destroyed first.
+// attachHandlers — subscribe to ALL events via sock.ev.process()
+//
+// WHY process() instead of sock.ev.on():
+//   Baileys v7 buffers events and flushes them as a single
+//   map via nativeEv.emit('event', map).  sock.ev.process()
+//   subscribes *directly* to that native 'event' emission.
+//   sock.ev.on(eventName, cb) relies on an internal re-emitter
+//   that converts the map back to individual events — one extra
+//   indirection that can silently break.  process() removes
+//   that layer.
 // ─────────────────────────────────────────────────────────
 function attachHandlers(sock, saveCreds) {
-  const sockId = sock?.authState?.creds?.me?.id || '(not yet paired)';
-  console.log(`[WA] attachHandlers — socket: ${sockId}`);
+  console.log('[WA] attachHandlers: attaching via sock.ev.process()');
 
-  // ── Credentials ──────────────────────────────────────
-  sock.ev.on('creds.update', saveCreds);
+  // ── CRITICAL FIX #2 ──────────────────────────────────
+  // Use sock.ev.process() — direct subscriber to the flushed
+  // event map.  All event types handled in one place.
+  sock.ev.process(async (events) => {
 
-  // ── Connection lifecycle ──────────────────────────────
-  sock.ev.on('connection.update', async (update) => {
-    const { connection, lastDisconnect, qr } = update;
+    // ── Credentials ──────────────────────────────────────
+    if (events['creds.update']) {
+      await saveCreds();
+    }
 
-    // ── Pairing code ──
-    if (qr) {
-      console.log('\n⚠️  QR detected — requesting pairing code...');
-      const phoneNumber = await askPhoneNumber();
-      console.log(`✅ Number entered: ${phoneNumber}`);
-      try {
-        const code = await sock.requestPairingCode(phoneNumber);
-        console.log(`\n📱 PAIRING CODE: ${code}`);
-        console.log('WhatsApp → Settings → Linked Devices → Link Device → Enter code\n');
-      } catch (err) {
-        console.error('[WA] Pairing code request failed:', err.message);
+    // ── Connection lifecycle ──────────────────────────────
+    if (events['connection.update']) {
+      const { connection, lastDisconnect, qr } = events['connection.update'];
+
+      if (qr) {
+        console.log('\n⚠️  QR — requesting pairing code...');
+        const phoneNumber = await askPhoneNumber();
+        console.log(`✅ Number: ${phoneNumber}`);
+        try {
+          const code = await sock.requestPairingCode(phoneNumber);
+          console.log(`\n📱 PAIRING CODE: ${code}`);
+          console.log('WhatsApp → Settings → Linked Devices → Link Device → Enter code\n');
+        } catch (err) {
+          console.error('[WA] Pairing code failed:', err.message);
+        }
+      }
+
+      if (connection === 'close') {
+        const statusCode    = lastDisconnect?.error?.output?.statusCode;
+        const reasonName    = Object.keys(DisconnectReason).find(
+                                k => DisconnectReason[k] === statusCode
+                              ) || statusCode;
+        const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+
+        console.log(`[WA] Connection closed — ${reasonName}(${statusCode}), reconnect: ${shouldReconnect}`);
+
+        if (!shouldReconnect) {
+          console.log('[WA] Logged out. Delete auth_info_baileys/ and restart.');
+          return;
+        }
+        const backoffMs = statusCode === 408 ? 15_000 : 5_000;
+        console.log(`[WA] Reconnecting in ${backoffMs / 1000}s...`);
+        scheduleReconnect(backoffMs);
+      }
+
+      if (connection === 'open') {
+        console.log(`\n✅ ${botConfig.name} connected!`);
+        console.log('═'.repeat(36));
+        console.log(`  Version  : ${botConfig.version} ${botConfig.beta}`);
+        console.log(`  Prefix   : ${botConfig.prefix}`);
+        console.log(`  Mode     : ${botConfig.mode}`);
+        console.log(`  Commands : ${Object.keys(allCommands).length}`);
+        console.log(`  Owner    : ${botConfig.ownerNumber || '⚠  Not set'}`);
+        console.log('═'.repeat(36) + '\n');
       }
     }
 
-    // ── Disconnected ──
-    if (connection === 'close') {
-      const statusCode    = lastDisconnect?.error?.output?.statusCode;
-      const reasonName    = Object.keys(DisconnectReason).find(
-                              k => DisconnectReason[k] === statusCode
-                            ) || statusCode;
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+    // ── Incoming messages ─────────────────────────────────
+    if (events['messages.upsert']) {
+      const { messages, type } = events['messages.upsert'];
 
-      console.log(
-        `[WA] Closed — code: ${statusCode} (${reasonName}), ` +
-        `reconnect: ${shouldReconnect}`
-      );
+      // Log EVERY upsert so we can verify the listener fires after reconnect
+      console.log(`[WA] messages.upsert — type: ${type}, count: ${messages.length}`);
 
-      if (!shouldReconnect) {
-        console.log('[WA] Logged out permanently. Remove auth_info_baileys/ and restart.');
+      if (type !== 'notify') {
+        console.log(`[WA] skipping non-notify type: ${type}`);
         return;
       }
 
-      // 408 = server-side keep-alive timeout → give it more recovery time
-      const backoffMs = statusCode === 408 ? 15_000 : 5_000;
-      console.log(`[WA] Will reconnect in ${backoffMs / 1000}s...`);
-      scheduleReconnect(backoffMs);
-    }
+      for (const message of messages) {
+        // Log raw message key for debugging
+        console.log(`[WA] msg key: jid=${message.key?.remoteJid} fromMe=${message.key?.fromMe} id=${message.key?.id}`);
 
-    // ── Connected ──
-    if (connection === 'open') {
-      console.log(`\n✅ ${botConfig.name} connected!`);
-      console.log('═'.repeat(34));
-      console.log(`  Version  : ${botConfig.version} ${botConfig.beta}`);
-      console.log(`  Prefix   : ${botConfig.prefix}`);
-      console.log(`  Mode     : ${botConfig.mode}`);
-      console.log(`  Commands : ${Object.keys(allCommands).length}`);
-      console.log(`  Owner    : ${botConfig.ownerNumber || '⚠ Not set'}`);
-      console.log('═'.repeat(34) + '\n');
-    }
-  });
+        if (!message.message) {
+          console.log('[WA] skipping: message.message is null (stub/protocol)');
+          continue;
+        }
 
-  // ── Incoming messages ─────────────────────────────────
-  // Log every fire so we can confirm the listener survives reconnects.
-  sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    console.log(`[WA] messages.upsert — type: ${type}, count: ${messages.length}`);
-    if (type !== 'notify') return;
+        const jid    = message.key.remoteJid;
+        const sender = message.key.participant || jid;
 
-    for (const message of messages) {
-      if (!message.message) continue;
+        // Cache for anti-delete
+        cacheMessage(message);
 
-      const jid    = message.key.remoteJid;
-      const sender = message.key.participant || jid;
+        if (message.key.fromMe) {
+          console.log('[WA] skipping: fromMe');
+          continue;
+        }
 
-      // Cache every message for anti-delete (own messages too)
-      cacheMessage(message);
+        // Status updates
+        if (jid === 'status@broadcast') {
+          await handleStatusUpdate(sock, [message]).catch(e =>
+            console.error('[handler] autoStatus:', e.message)
+          );
+          continue;
+        }
 
-      if (message.key.fromMe) continue;
+        // Banned users
+        if (db.isBanned(sender)) {
+          console.log(`[WA] skipping: sender ${sender} is banned`);
+          continue;
+        }
 
-      // Status updates
-      if (jid === 'status@broadcast') {
-        await handleStatusUpdate(sock, [message]).catch(e =>
-          console.error('[handler] autoStatus:', e.message)
+        await handleAutoReact(sock, message).catch(e =>
+          console.error('[handler] autoReact:', e.message)
         );
-        continue;
-      }
+        await handleAntiViewOnce(sock, message).catch(e =>
+          console.error('[handler] antiViewOnce:', e.message)
+        );
 
-      // Banned users
-      if (db.isBanned(sender)) continue;
+        const text =
+          message.message.conversation ||
+          message.message.extendedTextMessage?.text ||
+          message.message.imageMessage?.caption     || '';
 
-      // Protection (group-only; sock is passed explicitly)
-      await handleAutoReact(sock, message).catch(e =>
-        console.error('[handler] autoReact:', e.message)
-      );
-      await handleAntiViewOnce(sock, message).catch(e =>
-        console.error('[handler] antiViewOnce:', e.message)
-      );
+        console.log(`[WA] text: "${text}"`);
 
-      const text =
-        message.message.conversation ||
-        message.message.extendedTextMessage?.text || '';
+        const prefix = db.getSetting('prefix') || botConfig.prefix || '.';
 
-      const prefix = db.getSetting('prefix') || botConfig.prefix || '.';
+        if (text && isJidGroup(jid)) {
+          const blocked = await handleAntiLink(sock, message, botConfig).catch(e => {
+            console.error('[handler] antiLink:', e.message);
+            return false;
+          });
+          if (blocked) continue;
+          await handleAntiSpam(sock, message, botConfig).catch(e =>
+            console.error('[handler] antiSpam:', e.message)
+          );
+        }
 
-      if (text && isJidGroup(jid)) {
-        const blocked = await handleAntiLink(sock, message, botConfig).catch(e => {
-          console.error('[handler] antiLink:', e.message);
-          return false;
-        });
-        if (blocked) continue;
+        // Command routing
+        if (!text.startsWith(prefix)) {
+          console.log(`[WA] not a command (prefix "${prefix}" not matched)`);
+          continue;
+        }
 
-        await handleAntiSpam(sock, message, botConfig).catch(e =>
-          console.error('[handler] antiSpam:', e.message)
+        const parts   = text.slice(prefix.length).trim().split(/ +/);
+        const command = parts.shift().toLowerCase();
+        if (!command) continue;
+
+        console.log(`[WA] dispatching command: .${command}`);
+
+        handleCommand(command, parts, message, sock, botConfig).catch(err =>
+          console.error(`[cmd] .${command} unhandled:`, err.message)
         );
       }
+    }
 
-      // Commands
-      if (!text.startsWith(prefix)) continue;
-
-      const parts   = text.slice(prefix.length).trim().split(/ +/);
-      const command = parts.shift().toLowerCase();
-      if (!command) continue;
-
-      handleCommand(command, parts, message, sock, botConfig).catch(err =>
-        console.error(`[cmd] .${command} unhandled:`, err.message)
+    // ── Deleted messages ──────────────────────────────────
+    if (events['messages.delete']) {
+      // consolidateEvents always produces { keys: [...] }
+      const keys = events['messages.delete'].keys || [];
+      await handleAntiDelete(sock, keys).catch(e =>
+        console.error('[handler] antiDelete:', e.message)
       );
     }
-  });
 
-  // ── Deleted messages ──────────────────────────────────
-  sock.ev.on('messages.delete', async (item) => {
-    const keys = 'keys' in item
-      ? item.keys
-      : [{ id: item.ids?.[0], remoteJid: item.jid }];
-    await handleAntiDelete(sock, keys).catch(e =>
-      console.error('[handler] antiDelete:', e.message)
-    );
-  });
-
-  // ── Group participant changes ─────────────────────────
-  sock.ev.on('group-participants.update', async (update) => {
-    await handleParticipantUpdate(sock, update).catch(e =>
-      console.error('[handler] participantUpdate:', e.message)
-    );
+    // ── Group participant changes ─────────────────────────
+    if (events['group-participants.update']) {
+      await handleParticipantUpdate(sock, events['group-participants.update']).catch(e =>
+        console.error('[handler] participantUpdate:', e.message)
+      );
+    }
   });
 }
 
 // ─────────────────────────────────────────────────────────
-// scheduleReconnect(delayMs)
-//   Always uses setTimeout — never calls connect() from
-//   inside an event handler (avoids stacked async calls).
+// scheduleReconnect — always via setTimeout, never from
+// inside an event handler, to prevent stacked async calls
 // ─────────────────────────────────────────────────────────
 function scheduleReconnect(delayMs) {
   if (reconnectTimer) {
@@ -243,24 +280,22 @@ function scheduleReconnect(delayMs) {
 }
 
 // ─────────────────────────────────────────────────────────
-// connect()
-//   Orchestrates the full lifecycle in strict order:
-//     1. Acquire lock
-//     2. Destroy old socket
-//     3. Create new socket
-//     4. Assign to currentSock
-//     5. Attach handlers
-//     6. Release lock
+// connect — orchestrates the full socket lifecycle
+//   1. Acquire mutex
+//   2. Destroy old socket
+//   3. Create new socket
+//   4. Assign to currentSock
+//   5. Attach handlers
+//   6. Release mutex
 // ─────────────────────────────────────────────────────────
 async function connect() {
   if (isConnecting) {
-    console.log('[WA] connect() already in progress — skipping duplicate call.');
+    console.log('[WA] connect() already in progress — skipping.');
     return;
   }
   isConnecting = true;
   console.log('[WA] connect() starting...');
 
-  // Step 1: Destroy old socket
   if (currentSock) {
     console.log('[WA] Destroying previous socket...');
     destroySocket(currentSock);
@@ -268,41 +303,34 @@ async function connect() {
   }
 
   try {
-    // Step 2: Load persisted auth
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
 
-    // Step 3: Create fresh socket (no listeners yet)
     const sock = createSocket(state);
-
-    // Step 4: Register as the single live socket
     currentSock = sock;
 
-    // Step 5: Attach all listeners using the local reference
     attachHandlers(sock, saveCreds);
-
-    console.log('[WA] Socket ready and handlers attached.');
+    console.log('[WA] Socket created and handlers attached.');
   } catch (err) {
     console.error('[WA] connect() error:', err.message);
     scheduleReconnect(10_000);
   } finally {
-    // Step 6: Always release the lock so future reconnects work
     isConnecting = false;
   }
 }
 
-// ─── Phone number prompt ──────────────────────────────────
-// Singleton: only one readline prompt ever, result cached for all reconnects.
+// ─── Phone number prompt (singleton) ─────────────────────
+// Only ever opens ONE readline interface across all reconnects.
 let _phoneNumber = null;
 let _phoneNumberPromise = null;
 
 async function askPhoneNumber() {
-  if (_phoneNumber) return _phoneNumber;             // already answered
-  if (_phoneNumberPromise) return _phoneNumberPromise; // prompt already showing
+  if (_phoneNumber)        return _phoneNumber;
+  if (_phoneNumberPromise) return _phoneNumberPromise;
 
   _phoneNumberPromise = new Promise((resolve) => {
     const rl = readline.createInterface({
       input:  process.stdin,
-      output: process.stdout
+      output: process.stdout,
     });
     rl.question(
       '📱 Enter WhatsApp number (with country code, digits only): ',
@@ -318,22 +346,18 @@ async function askPhoneNumber() {
 }
 
 // ─── Group admin check ────────────────────────────────────
-// Uses currentSock only for metadata lookup (read-only, non-critical).
 async function isGroupAdmin(jid, senderJid) {
   const s = currentSock;
   if (!s) return false;
   try {
     const meta = await s.groupMetadata(jid);
     return meta.participants.some(
-      p => p.id === senderJid &&
-           (p.admin === 'admin' || p.admin === 'superadmin')
+      p => p.id === senderJid && (p.admin === 'admin' || p.admin === 'superadmin')
     );
   } catch { return false; }
 }
 
 // ─── Command dispatcher ───────────────────────────────────
-// `sock` here is the parameter passed from attachHandlers —
-// never read from the outer currentSock variable.
 async function handleCommand(command, args, message, sock, botConfig) {
   const jid      = message.key.remoteJid;
   const isGroup  = isJidGroup(jid);
@@ -349,7 +373,10 @@ async function handleCommand(command, args, message, sock, botConfig) {
               'Add it as a Replit Secret to activate the bot.'
       });
     }
-    if (senderNum !== ownerNum) return;
+    if (senderNum !== ownerNum) {
+      console.log(`[WA] private mode: blocked ${senderNum} (owner: ${ownerNum})`);
+      return;
+    }
   }
 
   const cmd = allCommands[command];
