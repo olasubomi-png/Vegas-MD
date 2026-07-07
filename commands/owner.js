@@ -225,6 +225,22 @@ const ownerCommands = {
     })
   },
 
+  antidelete: {
+    category: 'owner', desc: 'Toggle global anti-delete (DMs + any chat)',
+    usage: '.antidelete', aliases: [], permissions: 'owner',
+    examples: ['.antidelete'],
+    exec: ownerOnly(async (args, sock, jid) => {
+      const v = !db.getSetting('antiDelete', false);
+      db.setSetting('antiDelete', v);
+      await sock.sendMessage(jid, {
+        text: `🗑️ *Global Anti-Delete:* ${v ? '✅ Enabled' : '❌ Disabled'}\n\n` +
+              (v
+                ? '_Bot will reveal deleted messages in DMs and all chats._\n_For groups, also run .antidelete inside the group._'
+                : '_Anti-delete is now off globally._')
+      });
+    })
+  },
+
   addbalance: {
     category: 'owner', desc: 'Add coins to a user\'s balance',
     usage: '.addbalance @user <amount>', aliases: [], permissions: 'owner',

@@ -24,12 +24,13 @@ function cacheMessage(message) {
   const sender = message.key?.participant || jid;
   const msg    = message.message || {};
 
-  // Unwrap ephemeral / disappearing wrappers
+  // Unwrap ephemeral / disappearing wrappers (all known variants)
   const inner =
-    msg.ephemeralMessage?.message     ||
-    msg.viewOnceMessage?.message      ||
-    msg.viewOnceMessageV2?.message    ||
-    msg.viewOnceMessageV2Extension?.message ||
+    msg.ephemeralMessage?.message              ||
+    msg.ephemeralMessageV2Extension?.message   ||
+    msg.viewOnceMessage?.message               ||
+    msg.viewOnceMessageV2?.message             ||
+    msg.viewOnceMessageV2Extension?.message    ||
     msg;
 
   const text =
