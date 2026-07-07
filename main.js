@@ -16,7 +16,7 @@ const SILENT_LOGGER = {
   child() { return this; }
 };
 const db = require('./lib/database');
-const { normalizeJid } = require('./lib/helpers');
+const { normalizeJid, getMessageText } = require('./lib/helpers');
 const { handleParticipantUpdate } = require('./events/welcome');
 const {
   cacheMessage,
@@ -244,23 +244,10 @@ function attachHandlers(sock, saveCreds) {
             console.error('[handler] antiViewOnce:', e.stack || e.message)
           );
 
-          // ── Unwrap ephemeral / view-once containers ──────────
-          // WhatsApp wraps ALL messages in ephemeralMessage when
-          // disappearing messages are on for that chat.  Without
-          // this unwrap, text is always '' and NO command fires.
-          const innerMsg =
-            message.message.ephemeralMessage?.message              ||
-            message.message.ephemeralMessageV2Extension?.message   ||
-            message.message.viewOnceMessage?.message               ||
-            message.message.viewOnceMessageV2?.message             ||
-            message.message.viewOnceMessageV2Extension?.message    ||
-            message.message;
-
-          const text =
-            innerMsg.conversation                    ||
-            innerMsg.extendedTextMessage?.text       ||
-            innerMsg.imageMessage?.caption           ||
-            innerMsg.videoMessage?.caption           || '';
+          // ── Extract text (single source of truth: lib/helpers.js) ──
+          // getMessageText() unwraps ephemeral/view-once containers
+          // so .ping works even when disappearing messages are ON.
+          const text = getMessageText(message);
 
           console.log(`[WA] extracted text: "${text}"`);
 
