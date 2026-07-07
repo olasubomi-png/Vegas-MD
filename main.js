@@ -266,23 +266,44 @@ function attachHandlers(sock, saveCreds) {
           return;
         }
 
-        // ── NOT YET REGISTERED (pairing in progress) ────────────────────────
-        //
-        // We MUST reconnect — WhatsApp delivers the identity keys over the
-        // active WebSocket when the user enters the code.  Without a live
-        // socket the handshake cannot complete regardless of how long we wait.
-        //
-        // We must NOT wipe auth_info_baileys/ — it holds the identity keys WA
-        // uses to recognise this bot instance.  Wiping it destroys the partial
-        // pairing state and makes linking impossible for that session.
-        //
-        // We must NOT generate a new pairing code — connect() is called with
-        // freshLogin=false, so pairingCodeRequested stays true and the QR event
-        // on the new socket is silently ignored.  The existing code stays valid.
-        //
-        // Net result: one code, silent socket reconnect, process never exits,
-        // PM2 never sees a crash restart.
+        // ── NOT YET REGISTERED — two distinct sub-cases ────────────────────
         if (!registered) {
+          if (statusCode === DisconnectReason.loggedOut) {
+            // ── 401 + unregistered = CORRUPT / STALE AUTH STATE ─────────────
+            //
+            // Root cause of the "401 loop" failure mode:
+            //   auth_info_baileys/ contains noise keys + identity material
+            //   from a previous failed pairing attempt.  On reconnect Baileys
+            //   loads them and presents them to WhatsApp during the noise
+            //   handshake.  WhatsApp sees keys it doesn't recognise (because
+            //   pairing never completed) and immediately rejects with 401 —
+            //   before it ever emits a QR event.  hasQR stays false, the
+            //   pairing-code branch is never reached, and the bot loops.
+            //
+            // Fix: treat 401-while-unregistered exactly like 401-while-
+            //   registered: wipe auth_info_baileys/ and restart with a clean
+            //   slate so a fresh noise handshake and new pairing code can begin.
+            console.log('[WA] ⚠  401 loggedOut while unregistered — auth state is corrupt/stale.');
+            console.log('[WA]    This means a previous failed pairing left partial keys that');
+            console.log('[WA]    WhatsApp is rejecting at the noise-handshake level (no QR emitted).');
+            console.log('[WA]    Wiping auth_info_baileys/ and starting a clean pairing flow...');
+            try {
+              fs.rmSync('auth_info_baileys', { recursive: true, force: true });
+              console.log('[WA] auth_info_baileys/ cleared.');
+            } catch (e) {
+              console.error('[WA] Could not clear auth_info_baileys/:', e.message);
+            }
+            scheduleReconnect(3_000, { freshLogin: true });
+            return;
+          }
+
+          // ── Any other close reason while unregistered = mid-pairing drop ──
+          //
+          // WhatsApp delivers the identity keys over the active WebSocket when
+          // the user enters the code.  Without a live socket the handshake
+          // cannot complete.  Do NOT wipe auth_info_baileys/ (it holds the
+          // identity keys WA uses to recognise this bot instance) and do NOT
+          // request a new code (freshLogin=false keeps pairingCodeRequested).
           console.log(
             `[WA] ⚠  Connection dropped during pairing — ${reasonName}(${statusCode}).` +
             ` | pairingCodeRequested: ${pairingCodeRequested}` +
