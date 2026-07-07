@@ -1,10 +1,20 @@
+const fs = require('fs');
 const {
   default: makeWASocket,
   useMultiFileAuthState,
   DisconnectReason,
   isJidGroup
 } = require('baileys');
-const readline = require('readline');
+
+// Minimal pino-compatible logger — suppresses Baileys' noisy output while
+// still surfacing genuine errors. Baileys requires a .child() method.
+const SILENT_LOGGER = {
+  level: 'silent',
+  trace: () => {}, debug: () => {}, info: () => {}, warn: () => {},
+  error: (...a) => console.error('[baileys:error]', ...a),
+  fatal: (...a) => console.error('[baileys:fatal]', ...a),
+  child() { return this; }
+};
 const db = require('./lib/database');
 const { normalizeJid } = require('./lib/helpers');
 const { handleParticipantUpdate } = require('./events/welcome');
@@ -70,15 +80,18 @@ function createSocket(state) {
   const sockId = ++_sockSeq;
   console.log(`[WA] createSocket — sock#${sockId}`);
   const sock = makeWASocket({
-    auth:                state,
-    printQRInTerminal:   false,
-    browser:             ['Ubuntu', 'Chrome', '121.0.6167.160'],
-    connectTimeoutMs:    60_000,
-    keepAliveIntervalMs: 25_000,
-    retryRequestDelayMs: 250,
-    maxMsListenerCount:  50,
-    syncFullHistory:     false,
-    getMessage:          async () => undefined,
+    auth:                       state,
+    printQRInTerminal:          false,
+    browser:                    ['Ubuntu', 'Chrome', '121.0.6167.160'],
+    logger:                     SILENT_LOGGER,   // suppress verbose pino output
+    connectTimeoutMs:           60_000,
+    keepAliveIntervalMs:        25_000,
+    defaultQueryTimeoutMs:      60_000,
+    retryRequestDelayMs:        250,
+    maxMsgRetryCount:           5,               // was maxMsListenerCount (invalid)
+    syncFullHistory:            false,
+    generateHighQualityLinkPreview: false,
+    getMessage:                 async () => undefined,
   });
   sock._id = sockId;
   return sock;
@@ -130,15 +143,21 @@ function attachHandlers(sock, saveCreds) {
       const { connection, lastDisconnect, qr } = events['connection.update'];
 
       if (qr) {
-        console.log('\n⚠️  QR — requesting pairing code...');
-        const phoneNumber = await askPhoneNumber();
-        console.log(`✅ Number: ${phoneNumber}`);
-        try {
-          const code = await sock.requestPairingCode(phoneNumber);
-          console.log(`\n📱 PAIRING CODE: ${code}`);
-          console.log('WhatsApp → Settings → Linked Devices → Link Device → Enter code\n');
-        } catch (err) {
-          console.error('[WA] Pairing code failed:', err.message);
+        // Under PM2/non-TTY environments readline does not work.
+        // Read the number from the environment variable instead.
+        const phoneNumber = process.env.OWNER_NUMBER;
+        if (!phoneNumber) {
+          console.log('[WA] QR received but OWNER_NUMBER is not set — cannot request pairing code.');
+          console.log('[WA] Set OWNER_NUMBER (digits + country code) in your environment and restart.');
+        } else {
+          console.log(`[WA] QR received — requesting pairing code for ${phoneNumber}...`);
+          try {
+            const code = await sock.requestPairingCode(phoneNumber);
+            console.log(`\n📱 PAIRING CODE: ${code}`);
+            console.log('WhatsApp → Settings → Linked Devices → Link Device → Enter code\n');
+          } catch (err) {
+            console.error('[WA] Pairing code failed:', err.message);
+          }
         }
       }
 
@@ -322,6 +341,8 @@ async function connect() {
   }
 
   try {
+    // Ensure auth directory exists — prevents ENOENT on fresh deployments
+    fs.mkdirSync('auth_info_baileys', { recursive: true });
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
 
     const sock = createSocket(state);
@@ -335,33 +356,6 @@ async function connect() {
   } finally {
     isConnecting = false;
   }
-}
-
-// ─── Phone number prompt (singleton) ─────────────────────
-// Only ever opens ONE readline interface across all reconnects.
-let _phoneNumber = null;
-let _phoneNumberPromise = null;
-
-async function askPhoneNumber() {
-  if (_phoneNumber)        return _phoneNumber;
-  if (_phoneNumberPromise) return _phoneNumberPromise;
-
-  _phoneNumberPromise = new Promise((resolve) => {
-    const rl = readline.createInterface({
-      input:  process.stdin,
-      output: process.stdout,
-    });
-    rl.question(
-      '📱 Enter WhatsApp number (with country code, digits only): ',
-      (ans) => {
-        rl.close();
-        _phoneNumber = ans.trim().replace(/\D/g, '');
-        _phoneNumberPromise = null;
-        resolve(_phoneNumber);
-      }
-    );
-  });
-  return _phoneNumberPromise;
 }
 
 // ─── Group admin check ────────────────────────────────────
