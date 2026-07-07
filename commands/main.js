@@ -140,12 +140,14 @@ function buildCategoryMenu(catKey, cfg, allCmds, catReg) {
     const usage  = cmd?.usage   || `${prefix}${name}`;
     const perm   = permLabel(cmd?.permissions);
     const isLast = i === cmds.length - 1;
+    const branch = isLast ? '└' : '├';
+    const gutter = isLast ? ' ' : '│';
 
-    out += `├ *${prefix}${name}*\n`;
-    out += `│  ↳ ${desc}\n`;
-    out += `│  Usage: \`${usage}\`\n`;
-    out += `│  Permission: ${perm}\n`;
-    out += isLast ? '\n' : '\n';
+    out += `${branch} *${prefix}${name}*\n`;
+    out += `${gutter}  ↳ ${desc}\n`;
+    out += `${gutter}  Usage: \`${usage}\`\n`;
+    out += `${gutter}  Permission: ${perm}\n`;
+    out += '\n';
   }
 
   out += `┗━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n`;
@@ -170,8 +172,8 @@ function buildHelpCard(name, cmd, cfg) {
   const usage     = cmd.usage   || `${prefix}${name}`;
   const aliases   = cmd.aliases?.length ? cmd.aliases.map(a => `${prefix}${a}`).join(', ') : '—';
   const examples  = cmd.examples?.length
-    ? cmd.examples.map(e => `  ↳ \`${e}\``).join('\n')
-    : `  ↳ \`${usage}\``;
+    ? cmd.examples.map(e => `┃   ↳ \`${e}\``).join('\n')
+    : `┃   ↳ \`${usage}\``;
 
   return (
     `┏━━〔 📖 *${prefix}${name}* 〕━━┓\n` +
