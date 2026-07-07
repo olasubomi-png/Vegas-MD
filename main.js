@@ -166,12 +166,25 @@ function attachHandlers(sock, saveCreds) {
         const reasonName    = Object.keys(DisconnectReason).find(
                                 k => DisconnectReason[k] === statusCode
                               ) || statusCode;
-        const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+        // Do NOT reconnect if:
+        //   loggedOut (408)        — credentials revoked, reconnecting is pointless
+        //   connectionReplaced (440) — a newer process already holds the session;
+        //                             reconnecting here would kick THAT process,
+        //                             causing an infinite kick-loop between two instances
+        const noReconnectCodes = new Set([
+          DisconnectReason.loggedOut,           // 401
+          DisconnectReason.connectionReplaced,  // 440
+        ]);
+        const shouldReconnect = !noReconnectCodes.has(statusCode);
 
         console.log(`[WA] Connection closed — ${reasonName}(${statusCode}), reconnect: ${shouldReconnect}`);
 
         if (!shouldReconnect) {
-          console.log('[WA] Logged out. Delete auth_info_baileys/ and restart.');
+          if (statusCode === DisconnectReason.connectionReplaced) {
+            console.log('[WA] connectionReplaced — another instance took over. Stop this duplicate process.');
+          } else {
+            console.log('[WA] Logged out. Delete auth_info_baileys/ and restart.');
+          }
           return;
         }
         const backoffMs = statusCode === 408 ? 15_000 : 5_000;
