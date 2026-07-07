@@ -217,36 +217,65 @@ function attachHandlers(sock, saveCreds) {
       }
 
       if (connection === 'close') {
-        const statusCode    = lastDisconnect?.error?.output?.statusCode;
-        const reasonName    = Object.keys(DisconnectReason).find(
-                                k => DisconnectReason[k] === statusCode
-                              ) || statusCode;
-        // connectionReplaced (440): another process already owns this session.
-        // Reconnecting would kick that process → infinite kick-loop. Stop here.
+        const statusCode = lastDisconnect?.error?.output?.statusCode;
+        const reasonName = Object.keys(DisconnectReason).find(
+                             k => DisconnectReason[k] === statusCode
+                           ) || statusCode;
+
+        console.log(`[WA] Connection closed — ${reasonName}(${statusCode}) | registered: ${registered}`);
+
+        // ── 440 connectionReplaced: always stop, regardless of state ────────
+        // Another instance has taken over the session. Reconnecting would kick
+        // that instance → infinite kick-loop.
         if (statusCode === DisconnectReason.connectionReplaced) {
-          console.log('[WA] connectionReplaced — another instance took over. Stopping this duplicate.');
+          console.log('[WA] connectionReplaced — another instance took over. Halting this duplicate.');
           return;
         }
 
-        // loggedOut (401): credentials were revoked (device removed, re-registered, etc.).
-        // Wipe the stale session so the next connect() starts a fresh pairing-code flow.
+        // ── NOT YET REGISTERED (pairing in progress) ────────────────────────
+        // Do not reconnect for ANY reason while waiting for the user to link.
+        //
+        // Why: reconnecting creates a new socket, which resets
+        //   pairingCodeRequested=false and fires requestPairingCode() again —
+        //   immediately invalidating the code the user is currently entering.
+        //
+        // Why not wipe auth on 401 here: a 401 during the pairing handshake
+        //   is a transient WA response, not a "device logged out" signal.
+        //   Wiping auth_info_baileys/ destroys the partial pairing state and
+        //   makes linking impossible for that session.
+        //
+        // Recovery: the user must restart the bot manually to get a new code.
+        if (!registered) {
+          console.log(
+            `[WA] ⚠  Connection dropped during pairing (${reasonName}). ` +
+            'Not reconnecting — pairing code is still valid. ' +
+            'Restart the bot manually if you need a fresh code.'
+          );
+          return;
+        }
+
+        // ── REGISTERED — normal post-link reconnect logic ───────────────────
+
+        // 401 loggedOut: device was removed from WhatsApp or session was revoked
+        // on an already-linked account. Safe to wipe stale credentials and start
+        // a fresh pairing-code flow.
         if (statusCode === DisconnectReason.loggedOut) {
-          console.log('[WA] Logged out (401) — clearing stale session and starting fresh login...');
+          console.log('[WA] Logged out (401) after successful registration — clearing stale session...');
           try {
             fs.rmSync('auth_info_baileys', { recursive: true, force: true });
             console.log('[WA] auth_info_baileys/ cleared.');
           } catch (e) {
             console.error('[WA] Could not clear auth_info_baileys/:', e.message);
           }
-          console.log('[WA] Reconnecting in 3s to start new pairing-code flow...');
+          console.log('[WA] Reconnecting in 3s to start a fresh pairing-code flow...');
           scheduleReconnect(3_000);
           return;
         }
 
-        console.log(`[WA] Connection closed — ${reasonName}(${statusCode}), reconnecting...`);
-        const backoffMs = statusCode === 408 ? 15_000 : 5_000;
-        console.log(`[WA] Reconnecting in ${backoffMs / 1000}s...`);
-        scheduleReconnect(backoffMs);
+        // All other close reasons (408 connectionLost, timedOut, restart, etc.)
+        // — standard backoff reconnect.
+        console.log(`[WA] Reconnecting in 5s...`);
+        scheduleReconnect(5_000);
       }
 
       if (connection === 'open') {
