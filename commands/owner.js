@@ -49,7 +49,8 @@ const ownerCommands = {
       const s      = Math.floor((Date.now() - (global.botStartTime || Date.now())) / 1000);
       const h      = Math.floor(s / 3600);
       const m      = Math.floor((s % 3600) / 60);
-      const total  = Object.keys(require('./index')).length;
+      const _idx   = require('./index');
+      const total  = Object.keys(_idx).filter(k => typeof _idx[k]?.exec === 'function').length;
       await sock.sendMessage(jid, {
         text:
           `🛠️ *Owner Dashboard*\n\n` +
@@ -336,8 +337,8 @@ const ownerCommands = {
     examples: ['.listplugins'],
     exec: ownerOnly(async (args, sock, jid) => {
       const allCmds = require('./index');
-      const total   = Object.keys(allCmds).length;
-      const sorted  = Object.keys(allCmds).sort().join(', ');
+      const sorted  = Object.keys(allCmds).filter(k => typeof allCmds[k]?.exec === 'function').sort();
+      const total   = sorted.length;
       await sock.sendMessage(jid, {
         text: `🔌 *Loaded Commands* — Total: ${total}\n\n${sorted}`
       });
