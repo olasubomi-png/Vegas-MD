@@ -98,7 +98,7 @@ const aiCommands = {
   },
   gpt: {
     category: 'ai', desc: 'Ask ChatGPT (GPT-3.5)',
-    usage: '.gpt <question>', aliases: ['chatgpt'], permissions: 'all',
+    usage: '.gpt <question>', aliases: [], permissions: 'all',
     examples: ['.gpt Explain async/await'],
     exec: (args, sock, jid) => handleAI(args, sock, jid, { label: 'ChatGPT', provider: 'openai', model: 'gpt-3.5-turbo' })
   },

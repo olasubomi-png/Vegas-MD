@@ -39,7 +39,7 @@ const downloadCommands = {
   },
   facebook: {
     category: 'downloader', desc: 'Download Facebook video',
-    usage: '.facebook <url>', aliases: ['fb'], permissions: 'all',
+    usage: '.facebook <url>', aliases: [], permissions: 'all',
     examples: ['.facebook https://fb.com/video/...'],
     exec: stub('Facebook', '⬇️', ['facebook', 'fb.com', 'fb.watch'])
   },
@@ -51,7 +51,7 @@ const downloadCommands = {
   },
   instagram: {
     category: 'downloader', desc: 'Download Instagram photo or video',
-    usage: '.instagram <url>', aliases: ['igdl', 'ig'], permissions: 'all',
+    usage: '.instagram <url>', aliases: ['ig'], permissions: 'all',
     examples: ['.instagram https://www.instagram.com/p/xxx'],
     exec: stub('Instagram', '⬇️', ['instagram', 'ig.me', 'instagr.am'])
   },
@@ -69,13 +69,13 @@ const downloadCommands = {
   },
   ytmp3: {
     category: 'downloader', desc: 'Download YouTube audio (MP3)',
-    usage: '.ytmp3 <url>', aliases: ['song'], permissions: 'all',
+    usage: '.ytmp3 <url>', aliases: [], permissions: 'all',
     examples: ['.ytmp3 https://youtu.be/xxx'],
     exec: stub('YouTube MP3', '🎵', ['youtube', 'youtu.be'])
   },
   ytmp4: {
     category: 'downloader', desc: 'Download YouTube video (MP4)',
-    usage: '.ytmp4 <url>', aliases: ['video', 'yt'], permissions: 'all',
+    usage: '.ytmp4 <url>', aliases: [], permissions: 'all',
     examples: ['.ytmp4 https://youtu.be/xxx'],
     exec: stub('YouTube MP4', '🎬', ['youtube', 'youtu.be'])
   },
@@ -99,7 +99,7 @@ const downloadCommands = {
   },
   play: {
     category: 'downloader', desc: 'Search YouTube and play music',
-    usage: '.play <song name>', aliases: ['song'], permissions: 'all',
+    usage: '.play <song name>', aliases: [], permissions: 'all',
     examples: ['.play Shape of You', '.play Despacito'],
     exec: queryStub('play', '▶️')
   },

@@ -200,7 +200,7 @@ const groupCommands = {
 
   groupsettings: {
     category: 'group', desc: 'View all group protection settings',
-    usage: '.groupsettings', aliases: ['settings'], permissions: 'all',
+    usage: '.groupsettings', aliases: [], permissions: 'all',
     examples: ['.groupsettings'],
     exec: async (args, sock, jid, isGroup) => {
       if (!isGroup) return sock.sendMessage(jid, { text: '❌ Groups only.' });

@@ -76,7 +76,7 @@ const ownerCommands = {
 
   mode: {
     category: 'owner', desc: 'Set bot mode (public/private)',
-    usage: '.mode <public|private>', aliases: ['setmode'], permissions: 'owner',
+    usage: '.mode <public|private>', aliases: [], permissions: 'owner',
     examples: ['.mode public', '.mode private'],
     exec: ownerOnly(async (args, sock, jid, isGroup, sender, message, botConfig) => {
       const m = args[0]?.toLowerCase();

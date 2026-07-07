@@ -64,7 +64,7 @@ const toolsCommands = {
 
   remini: {
     category: 'sticker', desc: 'Enhance/restore image quality with AI (reply to image)',
-    usage: '.remini', aliases: ['enhance', 'hd'], permissions: 'all',
+    usage: '.remini', aliases: ['hd'], permissions: 'all',
     examples: ['.remini (reply to a blurry image)'],
     exec: async (args, sock, jid, isGroup, sender, message) => {
       const quoted = message.message?.extendedTextMessage?.contextInfo?.quotedMessage;

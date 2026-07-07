@@ -248,7 +248,7 @@ const generalCommands = {
     category:    'utility',
     desc:        'Show the bot GitHub repository link',
     usage:       '.repo',
-    aliases:     ['github', 'source'],
+    aliases:     ['source'],
     permissions: 'all',
     examples:    ['.repo'],
     exec: async (args, sock, jid) => {
