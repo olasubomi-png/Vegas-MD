@@ -1,21 +1,21 @@
 // Owner Dashboard Commands — owner-only controls
 const db = require('../lib/database');
-const { normalizeJid, getMentionedJid, formatNumber } = require('../lib/helpers');
+const { resolveIsOwner, getMentionedJid, formatNumber, normalizeJid } = require('../lib/helpers');
 
 function ownerOnly(exec) {
   return async (args, sock, jid, isGroup, sender, message, botConfig) => {
+    // resolveIsOwner: fromMe === true OR sender matches OWNER_NUMBER
+    if (resolveIsOwner(message, sender, botConfig)) {
+      return exec(args, sock, jid, isGroup, sender, message, botConfig);
+    }
+    // Not the owner — give a helpful message if the issue is misconfiguration
     const ownerNum = normalizeJid(botConfig?.ownerNumber || global.botConfig?.ownerNumber || '');
-    // If owner is not configured, lock the command completely — fail-safe default
     if (!ownerNum) {
       return sock.sendMessage(jid, {
         text: '🔒 Owner not configured.\n\nSet *OWNER_NUMBER* as a Replit Secret to enable owner commands.'
       });
     }
-    const senderNum = normalizeJid(sender);
-    if (senderNum !== ownerNum) {
-      return sock.sendMessage(jid, { text: '🔒 This command is *owner-only*.' });
-    }
-    return exec(args, sock, jid, isGroup, sender, message, botConfig);
+    return sock.sendMessage(jid, { text: '🔒 This command is *owner-only*.' });
   };
 }
 

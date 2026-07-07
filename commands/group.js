@@ -1,14 +1,14 @@
 // Group Management + Protection Toggle Commands
 const db = require('../lib/database');
-const { getMentionedJid, isGroupAdmin, normalizeJid, toggleEmoji } = require('../lib/helpers');
+const { getMentionedJid, isGroupAdmin, normalizeJid, toggleEmoji, resolveIsOwner } = require('../lib/helpers');
 
-async function requireAdmin(sock, jid, isGroup, sender, botConfig) {
+async function requireAdmin(sock, jid, isGroup, sender, message, botConfig) {
   if (!isGroup) {
     await sock.sendMessage(jid, { text: '❌ This command only works in groups.' });
     return false;
   }
-  const ownerNum = normalizeJid(botConfig?.ownerNumber || global.botConfig?.ownerNumber || '');
-  if (ownerNum && normalizeJid(sender) === ownerNum) return true;
+  // Owner (fromMe or matching OWNER_NUMBER) bypasses admin requirement
+  if (resolveIsOwner(message, sender, botConfig)) return true;
   const admin = await isGroupAdmin(sock, jid, sender);
   if (!admin) {
     await sock.sendMessage(jid, { text: '❌ Only group admins can use this command.' });
@@ -22,7 +22,7 @@ const groupCommands = {
   promote: {
     desc: 'Promote member to admin',
     exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
-      if (!await requireAdmin(sock, jid, isGroup, sender, botConfig)) return;
+      if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
       const target = getMentionedJid(message);
       if (!target) return sock.sendMessage(jid, { text: '❌ Usage: .promote @user' });
       try {
@@ -40,7 +40,7 @@ const groupCommands = {
   demote: {
     desc: 'Demote admin to member',
     exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
-      if (!await requireAdmin(sock, jid, isGroup, sender, botConfig)) return;
+      if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
       const target = getMentionedJid(message);
       if (!target) return sock.sendMessage(jid, { text: '❌ Usage: .demote @user' });
       try {
@@ -58,7 +58,7 @@ const groupCommands = {
   kick: {
     desc: 'Remove a member from the group',
     exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
-      if (!await requireAdmin(sock, jid, isGroup, sender, botConfig)) return;
+      if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
       const target = getMentionedJid(message);
       if (!target) return sock.sendMessage(jid, { text: '❌ Usage: .kick @user' });
       try {
@@ -76,7 +76,7 @@ const groupCommands = {
   mute: {
     desc: 'Mute group (only admins can send)',
     exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
-      if (!await requireAdmin(sock, jid, isGroup, sender, botConfig)) return;
+      if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
       try {
         await sock.groupSettingUpdate(jid, 'announcement');
         await sock.sendMessage(jid, { text: '🔇 Group *muted* — only admins can send messages.' });
@@ -89,7 +89,7 @@ const groupCommands = {
   unmute: {
     desc: 'Unmute group (everyone can send)',
     exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
-      if (!await requireAdmin(sock, jid, isGroup, sender, botConfig)) return;
+      if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
       try {
         await sock.groupSettingUpdate(jid, 'not_announcement');
         await sock.sendMessage(jid, { text: '🔊 Group *unmuted* — everyone can send messages.' });
@@ -102,7 +102,7 @@ const groupCommands = {
   tagall: {
     desc: 'Tag all group members',
     exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
-      if (!await requireAdmin(sock, jid, isGroup, sender, botConfig)) return;
+      if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
       try {
         const meta = await sock.groupMetadata(jid);
         const members = meta.participants.map(p => p.id);
@@ -159,7 +159,7 @@ const groupCommands = {
   welcome: {
     desc: 'Toggle welcome messages on/off',
     exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
-      if (!await requireAdmin(sock, jid, isGroup, sender, botConfig)) return;
+      if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
       const val = db.toggleGroup(jid, 'welcome');
       await sock.sendMessage(jid, { text: `👋 Welcome messages: ${val ? '✅ Enabled' : '❌ Disabled'}` });
     }
@@ -168,7 +168,7 @@ const groupCommands = {
   goodbye: {
     desc: 'Toggle goodbye messages on/off',
     exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
-      if (!await requireAdmin(sock, jid, isGroup, sender, botConfig)) return;
+      if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
       const val = db.toggleGroup(jid, 'goodbye');
       await sock.sendMessage(jid, { text: `👋 Goodbye messages: ${val ? '✅ Enabled' : '❌ Disabled'}` });
     }
@@ -177,7 +177,7 @@ const groupCommands = {
   antilink: {
     desc: 'Toggle anti-link protection',
     exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
-      if (!await requireAdmin(sock, jid, isGroup, sender, botConfig)) return;
+      if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
       const val = db.toggleGroup(jid, 'antiLink');
       await sock.sendMessage(jid, { text: `🔗 Anti-link: ${val ? '✅ Enabled' : '❌ Disabled'}` });
     }
@@ -186,7 +186,7 @@ const groupCommands = {
   antidelete: {
     desc: 'Toggle anti-delete (reveal deleted messages)',
     exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
-      if (!await requireAdmin(sock, jid, isGroup, sender, botConfig)) return;
+      if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
       const val = db.toggleGroup(jid, 'antiDelete');
       await sock.sendMessage(jid, { text: `🗑️ Anti-delete: ${val ? '✅ Enabled' : '❌ Disabled'}` });
     }
@@ -195,7 +195,7 @@ const groupCommands = {
   antispam: {
     desc: 'Toggle anti-spam protection',
     exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
-      if (!await requireAdmin(sock, jid, isGroup, sender, botConfig)) return;
+      if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
       const val = db.toggleGroup(jid, 'antiSpam');
       await sock.sendMessage(jid, { text: `🚨 Anti-spam: ${val ? '✅ Enabled' : '❌ Disabled'}` });
     }
@@ -204,7 +204,7 @@ const groupCommands = {
   antiviewonce: {
     desc: 'Toggle anti-view-once (reveal view-once media)',
     exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
-      if (!await requireAdmin(sock, jid, isGroup, sender, botConfig)) return;
+      if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
       const val = db.toggleGroup(jid, 'antiViewOnce');
       await sock.sendMessage(jid, { text: `👁️ Anti-view-once: ${val ? '✅ Enabled' : '❌ Disabled'}` });
     }
@@ -213,7 +213,7 @@ const groupCommands = {
   autoreact: {
     desc: 'Toggle auto-reactions to messages in this group',
     exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
-      if (!await requireAdmin(sock, jid, isGroup, sender, botConfig)) return;
+      if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
       const val = db.toggleGroup(jid, 'autoReact');
       await sock.sendMessage(jid, { text: `❤️ Auto-react: ${val ? '✅ Enabled' : '❌ Disabled'}` });
     }

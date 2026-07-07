@@ -1,15 +1,14 @@
 // Moderation Commands — warn, unwarn, ban in group context
 const db = require('../lib/database');
-const { getMentionedJid, isGroupAdmin, normalizeJid } = require('../lib/helpers');
+const { getMentionedJid, isGroupAdmin, normalizeJid, resolveIsOwner } = require('../lib/helpers');
 
 async function requireAdmin(sock, jid, isGroup, sender, message, botConfig) {
   if (!isGroup) {
     await sock.sendMessage(jid, { text: '❌ This command only works in groups.' });
     return false;
   }
-  const ownerNum = normalizeJid(botConfig?.ownerNumber || global.botConfig?.ownerNumber || '');
-  const senderNum = normalizeJid(sender);
-  if (ownerNum && senderNum === ownerNum) return true;
+  // Owner (fromMe or matching OWNER_NUMBER) bypasses admin requirement
+  if (resolveIsOwner(message, sender, botConfig)) return true;
   const admin = await isGroupAdmin(sock, jid, sender);
   if (!admin) {
     await sock.sendMessage(jid, { text: '❌ Only group admins can use this command.' });

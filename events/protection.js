@@ -4,7 +4,7 @@
 // so they never touch global.botConfig.
 
 const db = require('../lib/database');
-const { hasURL, normalizeJid, isGroupAdmin } = require('../lib/helpers');
+const { hasURL, normalizeJid, isGroupAdmin, resolveIsOwner } = require('../lib/helpers');
 const { downloadMediaMessage } = require('baileys');
 
 // ─── In-memory stores ─────────────────────────────────────
@@ -78,11 +78,10 @@ async function handleAntiLink(sock, message, botConfig) {
 
   if (!hasURL(text)) return false;
 
-  const sender    = message.key?.participant || jid;
-  const ownerNum  = normalizeJid(botConfig?.ownerNumber || '');
-  const senderNum = normalizeJid(sender);
+  const sender = message.key?.participant || jid;
 
-  if (ownerNum && senderNum === ownerNum) return false;
+  // Owner (fromMe or matching OWNER_NUMBER) is never penalised by anti-link
+  if (resolveIsOwner(message, sender, botConfig)) return false;
 
   const senderIsAdmin = await isGroupAdmin(sock, jid, sender);
   if (senderIsAdmin) return false;
@@ -122,9 +121,10 @@ async function handleAntiSpam(sock, message, botConfig) {
   const settings = db.getGroup(jid);
   if (!settings.antiSpam) return false;
 
-  const sender    = message.key?.participant || jid;
-  const ownerNum  = normalizeJid(botConfig?.ownerNumber || '');
-  if (ownerNum && normalizeJid(sender) === ownerNum) return false;
+  const sender = message.key?.participant || jid;
+
+  // Owner (fromMe or matching OWNER_NUMBER) is never penalised by anti-spam
+  if (resolveIsOwner(message, sender, botConfig)) return false;
 
   const now   = Date.now();
   const times = (spamMap.get(sender) || []).filter(t => now - t < SPAM_WINDOW_MS);

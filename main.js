@@ -16,7 +16,7 @@ const SILENT_LOGGER = {
   child() { return this; }
 };
 const db = require('./lib/database');
-const { normalizeJid, getMessageText } = require('./lib/helpers');
+const { normalizeJid, getMessageText, resolveIsOwner } = require('./lib/helpers');
 const { handleParticipantUpdate } = require('./events/welcome');
 const {
   cacheMessage,
@@ -403,8 +403,8 @@ async function handleCommand(command, args, message, sock, botConfig) {
   const sender    = message.key.participant || jid;
   const senderNum = normalizeJid(sender);
   const ownerNum  = normalizeJid(botConfig.ownerNumber);
-  // fromMe=true → the owner typed this from the bot's own device/account
-  const isFromMe  = message.key.fromMe === true;
+  // resolveIsOwner: fromMe === true OR sender matches OWNER_NUMBER
+  const isOwner   = resolveIsOwner(message, sender, botConfig);
 
   // Verify socket identity: handleCommand should always receive the live socket
   console.log(`[cmd] handleCommand entered — .${command} | sock#${sock?._id} currentSock#${currentSock?._id}`);
@@ -413,24 +413,21 @@ async function handleCommand(command, args, message, sock, botConfig) {
   console.log(`[cmd]   owner    : "${botConfig.ownerNumber}" → normalised: "${ownerNum}"`);
   console.log(`[cmd]   mode     : ${botConfig.mode}`);
   console.log(`[cmd]   isGroup  : ${isGroup}`);
-  console.log(`[cmd]   isFromMe : ${isFromMe}`);
+  console.log(`[cmd]   isOwner  : ${isOwner} (fromMe=${message.key.fromMe})`);
 
   // ── Permission check: private mode ─────────────────────
   if (botConfig.mode === 'private') {
-    if (isFromMe) {
-      // Message came from the bot's own account — always the owner
-      console.log('[cmd]   private mode: fromMe=true — auto-approved as owner');
+    if (isOwner) {
+      console.log('[cmd]   private mode: owner — allowed');
     } else if (!ownerNum) {
       console.log('[cmd]   private mode: OWNER_NUMBER not set — sending warning');
       return sock.sendMessage(jid, {
         text: '🔒 Bot is in *private mode* but OWNER_NUMBER is not set.\n\n' +
               'Add it as a Replit Secret to activate the bot.'
       });
-    } else if (senderNum !== ownerNum) {
+    } else {
       console.log(`[cmd]   private mode: BLOCKED — sender "${senderNum}" ≠ owner "${ownerNum}"`);
       return;
-    } else {
-      console.log('[cmd]   private mode: sender IS owner — allowed');
     }
   }
 
@@ -447,8 +444,7 @@ async function handleCommand(command, args, message, sock, botConfig) {
   console.log(`[cmd]   command ".${command}" FOUND — exec type: ${typeof cmd.exec}`);
 
   // ── Inject helpers onto message ─────────────────────────
-  // isFromMe qualifies as owner regardless of OWNER_NUMBER setting
-  message._isOwner      = isFromMe || (ownerNum ? senderNum === ownerNum : false);
+  message._isOwner      = isOwner;
   message._isGroupAdmin = isGroup
     ? () => isGroupAdmin(jid, sender)
     : async () => false;
