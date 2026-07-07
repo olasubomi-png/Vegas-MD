@@ -8,3 +8,4 @@ dist/
 build/
 .env
 .pairing_attempts.json
+.bot.lock
