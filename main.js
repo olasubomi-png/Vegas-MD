@@ -442,7 +442,13 @@ function attachHandlers(sock, saveCreds) {
             } catch (e) {
               console.error('[WA] Could not clear auth_info_baileys/:', e.message);
             }
-            scheduleReconnect(3_000, { freshLogin: true });
+            // Exponential backoff: 15s, 30s, 60s, 120s … capped at 5 min.
+            // Rapid reconnects after a 401 make WhatsApp keep rejecting at the
+            // noise-handshake level before it can emit a QR — giving it more
+            // breathing room between attempts lets the next attempt succeed.
+            const backoffMs = Math.min(15_000 * Math.pow(2, failCount - 1), 300_000);
+            console.log(`[WA]    Waiting ${Math.round(backoffMs / 1000)}s before next attempt (backoff #${failCount})...`);
+            scheduleReconnect(backoffMs, { freshLogin: true });
             return;
           }
 
