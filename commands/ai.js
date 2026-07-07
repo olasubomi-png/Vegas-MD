@@ -152,20 +152,22 @@ const aiCommands = {
     }
   },
   imagine: {
-    category: 'ai', desc: 'Generate a vivid AI image description',
+    category: 'ai', desc: 'Generate an AI image from a description',
     usage: '.imagine <description>', aliases: [], permissions: 'all',
-    examples: ['.imagine a futuristic city at night'],
+    examples: ['.imagine a futuristic city at night', '.imagine cute cat wearing sunglasses'],
     exec: async (args, sock, jid) => {
       const prompt = args.join(' ').trim();
       if (!prompt) return sock.sendMessage(jid, { text: '❌ Usage: .imagine <description>' });
-      await sock.sendMessage(jid, { text: `🎨 Generating for: _"${prompt}"_...` });
+      await sock.sendMessage(jid, { text: `🎨 *Imagine AI* generating image...\n\n_"${prompt}"_` });
       try {
-        const answer = await askPollinations(
-          `Write a vivid, detailed visual description of: ${prompt}`, 'openai'
-        );
-        await sock.sendMessage(jid, { text: `🎨 *AI Image Description*\n\n${answer}` });
+        const encoded = encodeURIComponent(prompt);
+        const imgUrl  = `https://image.pollinations.ai/prompt/${encoded}?model=flux&width=1024&height=1024&nologo=true&seed=${Math.floor(Math.random() * 999999)}`;
+        await sock.sendMessage(jid, {
+          image:   { url: imgUrl },
+          caption: `🎨 *Imagine AI*\n\n_"${prompt}"_`
+        });
       } catch (err) {
-        await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
+        await sock.sendMessage(jid, { text: `❌ Image generation failed: ${err.message}` });
       }
     }
   },

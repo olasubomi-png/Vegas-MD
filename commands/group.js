@@ -299,13 +299,20 @@ const groupCommands = {
     }
   },
 
-  // .delete — delete a replied-to message from the chat
+  // .delete — delete a replied-to message from the chat (groups + DMs)
   delete: {
     category: 'group', desc: 'Delete a replied message',
     usage: '.delete', aliases: ['del'], permissions: 'admin',
     examples: ['.delete (reply to the message you want to delete)'],
     exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
-      if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
+      // Groups: require admin. DMs: owner-only (no admins in DMs).
+      if (isGroup) {
+        if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
+      } else {
+        if (!resolveIsOwner(message, sender, botConfig)) {
+          return sock.sendMessage(jid, { text: '❌ Only the bot owner can use .delete in DMs.' });
+        }
+      }
       const ctx = getCtx(message);
       if (!ctx?.stanzaId) {
         return sock.sendMessage(jid, { text: '🗑️ *Delete Message*\n\nReply to the message you want to delete with *.delete*.' });
@@ -316,7 +323,7 @@ const groupCommands = {
           remoteJid:   jid,
           id:          ctx.stanzaId,
           participant: ctx.participant || undefined,
-          fromMe:      false
+          fromMe:      ctx.participant ? false : true  // DMs: target is fromMe; groups: target is from participant
         };
         await sock.sendMessage(jid, { delete: targetKey });
         // Also clean up the .delete command message itself
