@@ -29,6 +29,117 @@ const LOCK_FILE = '.bot.lock';
   process.on('SIGINT',  () => { releaseLock(); process.exit(0); });
   process.on('SIGTERM', () => { releaseLock(); process.exit(0); });
 })();
+
+// ─── Pairing-attempt rate-limit guard ────────────────────────────────────────
+// WhatsApp rate-limits a number that has too many failed pairing attempts in
+// a short period — every extra attempt makes the lockout longer. This counter
+// persists across PM2 restarts (stored in .pairing_attempts.json) and stops
+// the bot from re-hammering WhatsApp after repeated 401s.
+//
+// Behaviour:
+//   • Each 401-while-unregistered increments the counter.
+//   • After MAX_PAIRING_FAILURES the bot logs a clear message and exits
+//     WITHOUT reconnecting.  PM2 will try to restart it once more; on that
+//     restart the counter is still ≥ MAX so the bot exits immediately again —
+//     PM2's max_restarts cap then halts further restarts.
+//   • A successful link (connection === 'open') resets the counter to 0.
+//   • Counter auto-resets after PAIRING_COOLDOWN_MS (24 h) so the user can
+//     try again the next day without manual file deletion.
+const PAIRING_ATTEMPTS_FILE  = '.pairing_attempts.json';
+const MAX_PAIRING_FAILURES   = 3;
+const PAIRING_COOLDOWN_MS    = 24 * 60 * 60 * 1000; // 24 hours
+
+// ── Safe parse: always returns a validated { count, firstAttemptAt } object ──
+// • `count` is coerced to a non-negative integer (NaN/non-numeric → 0).
+// • `firstAttemptAt` must be a positive number; anything else → null.
+// • On invalid JSON or missing file, returns the safe-default object.
+// Invalid shapes are treated as "no attempts" so a corrupt file never
+// creates a permanent lockout that the user cannot escape without SSH.
+function readPairingAttempts() {
+  try {
+    const raw = fs.readFileSync(PAIRING_ATTEMPTS_FILE, 'utf8');
+    const obj = JSON.parse(raw);
+    const count          = Math.max(0, parseInt(obj?.count, 10) || 0);
+    const firstAttemptAt = (typeof obj?.firstAttemptAt === 'number' && obj.firstAttemptAt > 0)
+                             ? obj.firstAttemptAt
+                             : null;
+    return { count, firstAttemptAt };
+  } catch (_) {
+    return { count: 0, firstAttemptAt: null };
+  }
+}
+function writePairingAttempts(data) {
+  try {
+    fs.writeFileSync(PAIRING_ATTEMPTS_FILE, JSON.stringify(data));
+  } catch (err) {
+    console.error('[pairing-guard] ⚠  Could not write attempt counter:', err.message);
+  }
+}
+function resetPairingAttempts() {
+  writePairingAttempts({ count: 0, firstAttemptAt: null });
+}
+function incrementPairingAttempts() {
+  let data = readPairingAttempts();
+  const now = Date.now();
+  // Auto-reset if cooldown has passed
+  if (data.firstAttemptAt && (now - data.firstAttemptAt) > PAIRING_COOLDOWN_MS) {
+    data = { count: 0, firstAttemptAt: null };
+  }
+  data.count += 1;
+  if (!data.firstAttemptAt) data.firstAttemptAt = now;
+  writePairingAttempts(data);
+  return data.count;
+}
+
+function printPairingSuspendedBanner(hLeft) {
+  console.error('');
+  console.error('╔══════════════════════════════════════════════════════════════╗');
+  console.error('║  ⏸  PAIRING TEMPORARILY SUSPENDED                           ║');
+  console.error('╠══════════════════════════════════════════════════════════════╣');
+  console.error(`║  ${MAX_PAIRING_FAILURES} failed pairing attempts detected. WhatsApp is            ║`);
+  console.error('║  rate-limiting this number — more attempts make it worse.   ║');
+  console.error('║                                                             ║');
+  console.error(`║  ⏳ Wait ~${String(hLeft).padEnd(2)} hour(s), then run on your server:           ║`);
+  console.error('║                                                             ║');
+  console.error('║    pm2 delete olasubomi                                     ║');
+  console.error('║    rm -f .pairing_attempts.json                             ║');
+  console.error('║    rm -rf auth_info_baileys/                                ║');
+  console.error('║    pm2 start main.js --name olasubomi                       ║');
+  console.error('║                                                             ║');
+  console.error('║  Enter the NEW code in WhatsApp IMMEDIATELY after it shows. ║');
+  console.error('╚══════════════════════════════════════════════════════════════╝');
+  console.error('');
+}
+
+// Check the counter at startup — if already at the limit, refuse to run.
+// Note: PM2 with autorestart:true will still restart up to max_restarts times,
+// but each restart exits here immediately (no WA connection attempted), so
+// WhatsApp is not hammered further. PM2 eventually marks the app unstable.
+(function checkPairingLimitAtStartup() {
+  const data = readPairingAttempts();
+  if (data.count < MAX_PAIRING_FAILURES) return; // under limit — allow startup
+  const now = Date.now();
+
+  // If firstAttemptAt is missing/invalid but count is at limit, the file is
+  // in a bad state.  Reset it so a corrupt file can never permanently block
+  // the bot — the user would be stuck with no way out short of SSH.
+  if (!data.firstAttemptAt) {
+    console.warn('[pairing-guard] Counter at limit but timestamp missing — resetting to allow startup.');
+    resetPairingAttempts();
+    return;
+  }
+
+  if ((now - data.firstAttemptAt) > PAIRING_COOLDOWN_MS) {
+    resetPairingAttempts();
+    return; // cooldown passed — allow startup
+  }
+
+  const msLeft = PAIRING_COOLDOWN_MS - (now - data.firstAttemptAt);
+  const hLeft  = Math.max(1, Math.ceil(msLeft / 3_600_000));
+  printPairingSuspendedBanner(hLeft);
+  process.exit(0);
+})();
+
 const {
   default: makeWASocket,
   useMultiFileAuthState,
@@ -314,6 +425,16 @@ function attachHandlers(sock, saveCreds) {
             console.log('[WA] ⚠  401 loggedOut while unregistered — auth state is corrupt/stale.');
             console.log('[WA]    This means a previous failed pairing left partial keys that');
             console.log('[WA]    WhatsApp is rejecting at the noise-handshake level (no QR emitted).');
+
+            const failCount = incrementPairingAttempts();
+            console.log(`[WA]    Pairing failure #${failCount} of ${MAX_PAIRING_FAILURES} allowed.`);
+
+            if (failCount >= MAX_PAIRING_FAILURES) {
+              printPairingSuspendedBanner(24);
+              process.exit(0); // PM2 will restart a few more times but exits immediately each time
+              return;
+            }
+
             console.log('[WA]    Wiping auth_info_baileys/ and starting a clean pairing flow...');
             try {
               fs.rmSync('auth_info_baileys', { recursive: true, force: true });
@@ -381,6 +502,9 @@ function attachHandlers(sock, saveCreds) {
       }
 
       if (connection === 'open') {
+        // Successful link — reset the pairing-attempt counter so the user
+        // can always re-pair cleanly after a future logout.
+        resetPairingAttempts();
         console.log(`\n✅ ${botConfig.name} connected! (sock#${sockId})`);
         console.log('═'.repeat(52));
         console.log(`  Version  : ${botConfig.version} ${botConfig.beta}`);
