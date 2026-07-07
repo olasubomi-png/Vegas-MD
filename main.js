@@ -3,7 +3,8 @@ const {
   default: makeWASocket,
   useMultiFileAuthState,
   DisconnectReason,
-  isJidGroup
+  isJidGroup,
+  fetchLatestBaileysVersion,
 } = require('baileys');
 
 // Minimal pino-compatible logger — suppresses Baileys' noisy output while
@@ -84,19 +85,23 @@ function destroySocket(sock) {
 //     Required by Baileys for message-retry logic.
 //     Returning undefined is safe and matches the default.
 // ─────────────────────────────────────────────────────────
-function createSocket(state) {
+function createSocket(state, version) {
   const sockId = ++_sockSeq;
-  console.log(`[WA] createSocket — sock#${sockId}`);
+  console.log(`[WA] createSocket — sock#${sockId} | WA version: ${version?.join('.')}`);
   const sock = makeWASocket({
     auth:                       state,
+    version,                              // resolved via fetchLatestBaileysVersion()
     printQRInTerminal:          false,
-    browser:                    ['Ubuntu', 'Chrome', '121.0.6167.160'],
-    logger:                     SILENT_LOGGER,   // suppress verbose pino output
+    // Do NOT override `browser` — Baileys' default ["Mac OS","Chrome","14.4.1"]
+    // is specifically chosen to pass WhatsApp's browser-fingerprint check during
+    // the pairing handshake.  A custom string (e.g. Ubuntu/Chrome 121) causes
+    // "Couldn't link device" because WA rejects unrecognised browser profiles.
+    logger:                     SILENT_LOGGER,
     connectTimeoutMs:           60_000,
     keepAliveIntervalMs:        25_000,
     defaultQueryTimeoutMs:      60_000,
     retryRequestDelayMs:        250,
-    maxMsgRetryCount:           5,               // was maxMsListenerCount (invalid)
+    maxMsgRetryCount:           5,
     syncFullHistory:            false,
     generateHighQualityLinkPreview: false,
     getMessage:                 async () => undefined,
@@ -422,6 +427,12 @@ async function connect() {
   }
 
   try {
+    // Resolve the latest Baileys-known WA protocol version.
+    // This avoids using a stale hardcoded version if the library
+    // was installed a while ago.
+    const { version, isLatest } = await fetchLatestBaileysVersion();
+    console.log(`[WA] WA version: ${version.join('.')} (isLatest: ${isLatest})`);
+
     // Ensure auth directory exists — prevents ENOENT on fresh deployments
     fs.mkdirSync('auth_info_baileys', { recursive: true });
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
@@ -433,7 +444,7 @@ async function connect() {
       console.log('[WA] No registered session — will request ONE pairing code when QR event fires.');
     }
 
-    const sock = createSocket(state);
+    const sock = createSocket(state, version);
     currentSock = sock;
 
     attachHandlers(sock, saveCreds);
