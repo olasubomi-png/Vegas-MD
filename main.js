@@ -228,8 +228,87 @@ let pairingCodeRequested = false;
 // Cleared immediately after it is consumed (one-use flag).
 let _freshWipeGrace = false;
 
+// ─── New-login session backup flag ────────────────────────
+// Set to true in connect() when creds.registered === false,
+// meaning this is a brand-new pairing rather than a reconnect.
+// Consumed (set back to false) the moment connection === 'open'
+// fires so the backup is sent exactly once per new login.
+let _isNewLogin = false;
+
 // ─────────────────────────────────────────────────────────
 // destroySocket — remove all listeners then close the WS
+// ─────────────────────────────────────────────────────────
+// sendSessionBackup — zip auth_info_baileys/ and send to owner
+//
+// Called ONCE per new login (not on reconnects).
+// Uses `tar` (always available on Linux) to create a .tar.gz.
+// Runs in background so it never delays the connection.
+// ─────────────────────────────────────────────────────────
+async function sendSessionBackup(sock) {
+  const { execFile } = require('child_process');
+  const { promisify } = require('util');
+  const execFileAsync = promisify(execFile);
+  const os   = require('os');
+  const path = require('path');
+
+  const ownerNum = String(
+    process.env.OWNER_NUMBER || botConfig.ownerNumber || ''
+  ).replace(/\D/g, '');
+
+  if (!ownerNum) {
+    console.warn('[backup] OWNER_NUMBER not set — skipping session backup.');
+    return;
+  }
+
+  const ownerJid  = `${ownerNum}@s.whatsapp.net`;
+  const authDir   = path.resolve('auth_info_baileys');
+  const now       = new Date();
+  const stamp     = now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const filename  = `session_${botConfig.name}_${stamp}.tar.gz`;
+  const outPath   = path.join(os.tmpdir(), filename);
+
+  console.log('[backup] New login detected — preparing session backup...');
+
+  // Wait a few seconds to ensure creds are fully flushed to disk
+  await new Promise(r => setTimeout(r, 5000));
+
+  try {
+    // Create tarball of the auth directory (parent dir as base)
+    await execFileAsync('tar', [
+      '-czf', outPath,
+      '-C',   path.dirname(authDir),
+      path.basename(authDir)
+    ]);
+
+    const buf      = fs.readFileSync(outPath);
+    const sizekb   = (buf.length / 1024).toFixed(1);
+    const device   = sock.user?.name || sock.user?.id?.split(':')[0] || 'Unknown device';
+    const loginAt  = now.toLocaleString('en-GB', { timeZone: 'Africa/Lagos', hour12: false });
+
+    const caption =
+      `✅ *New WhatsApp Session Created*\n\n` +
+      `📱 Device   : ${device}\n` +
+      `🕐 Time     : ${loginAt} (WAT)\n` +
+      `🤖 Bot      : ${botConfig.name} v${botConfig.version} ${botConfig.beta}\n` +
+      `📦 Size     : ${sizekb} KB\n\n` +
+      `⚠️ *Keep this file safe — it contains your session credentials.*\n` +
+      `_To restore: unzip and replace your auth_info_baileys/ folder._`;
+
+    await sock.sendMessage(ownerJid, {
+      document: buf,
+      mimetype: 'application/gzip',
+      fileName: filename,
+      caption
+    });
+
+    console.log(`[backup] Session backup sent to owner (${sizekb} KB) — ${filename}`);
+  } catch (err) {
+    console.error('[backup] Failed to create/send session backup:', err.message);
+  } finally {
+    try { fs.unlinkSync(outPath); } catch {}
+  }
+}
+
 // ─────────────────────────────────────────────────────────
 function destroySocket(sock) {
   if (!sock) return;
@@ -583,6 +662,15 @@ function attachHandlers(sock, saveCreds) {
         console.log(`  Commands : ${cmdNames.length} registered`);
         console.log(`  List     : ${cmdNames.join(', ')}`);
         console.log('═'.repeat(52) + '\n');
+
+        // ── Session backup — only on brand-new logins ──────────────
+        if (_isNewLogin) {
+          _isNewLogin = false;   // consume immediately — one-shot
+          // Run async in background so it never blocks the connection
+          sendSessionBackup(sock).catch(err =>
+            console.error('[backup] sendSessionBackup failed (non-fatal):', err.message)
+          );
+        }
       }
     }
 
@@ -801,8 +889,10 @@ async function connect({ freshLogin = false } = {}) {
     console.log(`[WA] Auth state loaded — creds.registered: ${state.creds.registered}`);
     if (state.creds.registered) {
       console.log('[WA] Existing credentials found — resuming session (no pairing code needed).');
+      _isNewLogin = false;
     } else {
       console.log('[WA] No registered session — will request ONE pairing code when QR event fires.');
+      _isNewLogin = true;   // flag: send backup on first successful open
     }
 
     const sock = createSocket(state, version);
