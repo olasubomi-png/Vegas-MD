@@ -4,7 +4,7 @@
 // All handlers receive sock + botConfig as explicit parameters — no global reads.
 
 const db = require('../lib/database');
-const { hasURL, normalizeJid, isGroupAdmin, resolveIsOwner } = require('../lib/helpers');
+const { hasURL, normalizeJid, isGroupAdmin, resolveIsOwner, getMessageText } = require('../lib/helpers');
 const { downloadMediaMessage } = require('baileys');
 
 // ─── In-memory message cache (for anti-delete) ────────────
@@ -104,9 +104,13 @@ async function handleAntiDelete(sock, deletedKeys) {
 
     const senderNum = cached.sender.split('@')[0];
 
+    // Owner JID for DM notification
+    const ownerNum = (process.env.OWNER_NUMBER || '').replace(/\D/g, '');
+    const ownerJid = ownerNum ? `${ownerNum}@s.whatsapp.net` : null;
+
     try {
       if (isGroup) {
-        // Groups: try to re-post the deleted media if possible
+        // Groups: re-post the deleted content in the group, then also notify owner
         if (cached.mediaType && cached.rawMessage) {
           try {
             const buffer = await downloadMediaMessage(cached.rawMessage, 'buffer', {});
@@ -157,8 +161,19 @@ async function handleAntiDelete(sock, deletedKeys) {
             mentions: [cached.sender]
           });
         }
+
+        // Also notify owner via DM with group context
+        if (ownerJid && ownerJid !== chatJid) {
+          await sock.sendMessage(ownerJid, {
+            text:
+              `🗑️ *Anti-Delete (Group)*\n\n` +
+              `👤 Sender  : @${senderNum}\n` +
+              `💬 Message : ${cached.text || `[${cached.mediaType || 'Unknown'}]`}\n` +
+              `📍 Group   : ${chatJid.split('@')[0]}`
+          }).catch(() => {});
+        }
       } else {
-        // DM — simple text notification (media re-post not needed in DMs)
+        // DM — simple text notification
         await sock.sendMessage(chatJid, {
           text: `🗑️ *Anti-Delete Alert*\n\nYou deleted a message:\n\n"${cached.text}"`
         });
@@ -200,9 +215,9 @@ async function handleAntiLink(sock, message, botConfig) {
   const settings = db.getGroup(jid);
   if (!settings.antiLink) return false;
 
-  const text =
-    message.message?.conversation ||
-    message.message?.extendedTextMessage?.text || '';
+  // Use getMessageText() so links in image/video captions and
+  // ephemeral messages are also detected, not just plain text.
+  const text = getMessageText(message);
 
   if (!hasURL(text)) return false;
 
@@ -392,7 +407,8 @@ async function handleAntiCall(sock, calls) {
   if (!antiVoice && !antiVideo) return;
 
   for (const call of calls) {
-    if (call.status !== 'offer') continue; // only intercept incoming offers
+    // Intercept incoming offers only
+    if (call.status !== 'offer') continue;
 
     const isVideo = call.isVideo === true;
 
@@ -402,31 +418,49 @@ async function handleAntiCall(sock, calls) {
 
     const caller = call.from;
 
-    try {
-      // Always reject the call
-      await sock.rejectCall(call.id, caller);
-      console.log(`[antiCall] Rejected ${isVideo ? 'video' : 'voice'} call from ${caller}`);
+    let rejected = false;
 
-      // Block mode — also block the caller
-      if (callMode === 'block') {
+    // ── Reject the call ─────────────────────────────────
+    if (typeof sock.rejectCall === 'function') {
+      try {
+        await sock.rejectCall(call.id, caller);
+        rejected = true;
+        console.log(`[antiCall] Rejected ${isVideo ? 'video' : 'voice'} call from ${caller}`);
+      } catch (rejectErr) {
+        console.error('[antiCall] rejectCall failed:', rejectErr.message);
+      }
+    } else {
+      console.warn('[antiCall] sock.rejectCall is not available in this Baileys build');
+    }
+
+    // ── Block the caller (if block mode) ─────────────────
+    if (callMode === 'block' && typeof sock.updateBlockStatus === 'function') {
+      try {
         await sock.updateBlockStatus(caller, 'block');
         console.log(`[antiCall] Blocked ${caller}`);
+      } catch (blockErr) {
+        console.warn('[antiCall] updateBlockStatus failed:', blockErr.message);
       }
+    }
 
-      // Notify the owner's DM
-      const ownerNum = process.env.OWNER_NUMBER;
-      if (ownerNum) {
-        const ownerJid = `${ownerNum.replace(/\D/g, '')}@s.whatsapp.net`;
-        await sock.sendMessage(ownerJid, {
-          text:
-            `📵 *Anti-Call Triggered*\n\n` +
-            `📞 Type   : ${isVideo ? 'Video' : 'Voice'} Call\n` +
-            `👤 From   : @${caller.split('@')[0]}\n` +
-            `⚙️  Action : ${callMode === 'block' ? 'Rejected + Blocked' : 'Rejected'}`
-        }).catch(() => {});
-      }
-    } catch (err) {
-      console.error('[antiCall]', err.message);
+    // ── Notify owner via DM ──────────────────────────────
+    const ownerNum = (process.env.OWNER_NUMBER || '').replace(/\D/g, '');
+    if (ownerNum) {
+      const ownerJid = `${ownerNum}@s.whatsapp.net`;
+      const actionLabel = (() => {
+        const parts = [];
+        if (rejected)                parts.push('Rejected ✂️');
+        if (callMode === 'block')    parts.push('Blocked 🚫');
+        if (!rejected && parts.length === 0) parts.push('Rejection failed ⚠️');
+        return parts.join(' + ');
+      })();
+      await sock.sendMessage(ownerJid, {
+        text:
+          `📵 *Anti-Call Triggered*\n\n` +
+          `📞 Type   : ${isVideo ? 'Video 📹' : 'Voice 🔊'} Call\n` +
+          `👤 From   : @${caller.split('@')[0]}\n` +
+          `⚙️  Action : ${actionLabel}`
+      }).catch(() => {});
     }
   }
 }

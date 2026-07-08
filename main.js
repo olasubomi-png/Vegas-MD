@@ -792,8 +792,9 @@ function attachHandlers(sock, saveCreds) {
 
     // ── Deleted messages ──────────────────────────────────
     if (events['messages.delete']) {
-      // consolidateEvents always produces { keys: [...] }
-      const keys = events['messages.delete'].keys || [];
+      // Baileys may emit { keys: [...] } or a plain array — handle both
+      const raw  = events['messages.delete'];
+      const keys = Array.isArray(raw) ? raw : (raw.keys || []);
       await handleAntiDelete(sock, keys).catch(e =>
         console.error('[handler] antiDelete:', e.message)
       );
