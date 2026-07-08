@@ -219,6 +219,15 @@ let _sockSeq             = 0;   // monotonically increasing socket ID for identi
 // would generate a second code and invalidate the first.
 let pairingCodeRequested = false;
 
+// ─── Post-logout wipe grace flag ──────────────────────────
+// Set to true by wipAndRepair() after a clean logout-triggered
+// wipe. If the VERY NEXT connect attempt gets a 401 (WA server
+// hasn't fully cleared the old session yet), we treat it as a
+// transient rejection rather than a real pairing failure so it
+// doesn't burn the failure counter or trigger a long backoff.
+// Cleared immediately after it is consumed (one-use flag).
+let _freshWipeGrace = false;
+
 // ─────────────────────────────────────────────────────────
 // destroySocket — remove all listeners then close the WS
 // ─────────────────────────────────────────────────────────
@@ -423,6 +432,22 @@ function attachHandlers(sock, saveCreds) {
             //   registered: wipe auth_info_baileys/ and restart with a clean
             //   slate so a fresh noise handshake and new pairing code can begin.
             console.log('[WA] ⚠  401 loggedOut while unregistered — auth state is corrupt/stale.');
+
+            // Grace period: wipAndRepair() sets _freshWipeGrace=true after a clean
+            // logout wipe.  The FIRST post-wipe connect may still get a 401 because
+            // WA's server hasn't fully processed the logout yet.  Skip the failure
+            // counter and use a short 10 s retry instead of the full backoff ladder.
+            if (_freshWipeGrace) {
+              _freshWipeGrace = false; // consume — only one free pass
+              console.log('[WA]    Grace pass: this 401 is a server-side delay after clean logout wipe.');
+              console.log('[WA]    Not counted as a pairing failure. Retrying in 10s...');
+              try {
+                fs.rmSync('auth_info_baileys', { recursive: true, force: true });
+              } catch (_) {}
+              scheduleReconnect(10_000, { freshLogin: true });
+              return;
+            }
+
             console.log('[WA]    This means a previous failed pairing left partial keys that');
             console.log('[WA]    WhatsApp is rejecting at the noise-handshake level (no QR emitted).');
 
@@ -476,7 +501,18 @@ function attachHandlers(sock, saveCreds) {
         // Also resets the pairing-attempts counter because a legitimate logout
         // should always allow a clean re-pair — it is NOT a failed pairing attempt.
         function wipAndRepair(reason) {
-          console.log(`[WA] ${reason} — clearing stale session and starting fresh pairing...`);
+          console.log('');
+          console.log('╔══════════════════════════════════════════════════════════════╗');
+          console.log('║  🔓  MAIN SESSION LOGGED OUT — AUTO RE-PAIRING              ║');
+          console.log('╠══════════════════════════════════════════════════════════════╣');
+          console.log(`║  Reason : ${reason.slice(0, 51).padEnd(51)}║`);
+          console.log('║                                                              ║');
+          console.log('║  The bot will request a NEW pairing code in ~10 seconds.    ║');
+          console.log('║  ✅ Enter it in WhatsApp IMMEDIATELY when it appears.        ║');
+          console.log('║  ⛔ Do NOT restart the bot — it will re-pair automatically. ║');
+          console.log('╚══════════════════════════════════════════════════════════════╝');
+          console.log('');
+
           try {
             fs.rmSync('auth_info_baileys', { recursive: true, force: true });
             console.log('[WA] auth_info_baileys/ cleared.');
@@ -485,7 +521,29 @@ function attachHandlers(sock, saveCreds) {
           }
           resetPairingAttempts(); // fresh slate — don't count logout as a pairing failure
           console.log('[WA] Pairing-attempts counter reset (clean logout, not a failure).');
-          scheduleReconnect(3_000, { freshLogin: true });
+
+          // Notify the owner via any connected secondary session so they get a
+          // WhatsApp message even when they aren't watching the server logs.
+          const ownerNum = String(process.env.OWNER_NUMBER || db?.getSetting('ownerNumber', '') || '').replace(/\D/g, '');
+          if (ownerNum) {
+            const ownerJid = `${ownerNum}@s.whatsapp.net`;
+            sessionManager.notifyViaSecondary(ownerJid,
+              `🔓 *Main session logged out!*\n\n` +
+              `Reason: ${reason}\n\n` +
+              `The bot is re-pairing automatically.\n` +
+              `A new pairing code will appear in the server logs in ~10 seconds.\n\n` +
+              `✅ Enter it in WhatsApp → Settings → Linked Devices → Link a Device`
+            ).catch(() => {});
+          }
+
+          // Grace flag: if WA still rejects on the very next connect, treat it
+          // as a transient server-side delay — not a real pairing failure.
+          _freshWipeGrace = true;
+
+          // Wait 10 s before reconnecting — gives WhatsApp's server time to
+          // fully clear the old session so the new socket gets a fresh QR
+          // instead of an immediate 401 noise-handshake rejection.
+          scheduleReconnect(10_000, { freshLogin: true });
         }
 
         // 401 loggedOut: device was removed or session revoked.
