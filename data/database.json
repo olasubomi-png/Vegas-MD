@@ -11,6 +11,18 @@
       "warnings": 0,
       "banned": false,
       "createdAt": "2026-07-06T19:00:18.601Z"
+    },
+    "sender": {
+      "id": "sender",
+      "name": "",
+      "balance": 0,
+      "xp": 0,
+      "level": 1,
+      "lastDaily": null,
+      "lastWork": null,
+      "warnings": 0,
+      "banned": false,
+      "createdAt": "2026-07-08T02:28:41.389Z"
     }
   },
   "groups": {

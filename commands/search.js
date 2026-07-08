@@ -1,9 +1,10 @@
 'use strict';
 // commands/search.js — Search commands via free public APIs
+// All APIs are keyless.  lyrics uses api.lyrics.ovh (verified working).
 const axios = require('axios');
 
 async function googleSearch(query) {
-  // Uses DuckDuckGo instant answer API (no key needed)
+  // DuckDuckGo instant answer API — no key required
   const res = await axios.get('https://api.duckduckgo.com/', {
     params: { q: query, format: 'json', no_html: 1, skip_disambig: 1 },
     timeout: 10000
@@ -11,10 +12,12 @@ async function googleSearch(query) {
   const d = res.data;
   if (d.AbstractText) return `🔍 *${d.Heading}*\n\n${d.AbstractText}\n\n🔗 ${d.AbstractURL || 'N/A'}`;
   if (d.Answer)       return `🔍 *Answer*\n\n${d.Answer}`;
-  return `🔍 No instant result for "*${query}*".\n\nTry: https://google.com/search?q=${encodeURIComponent(query)}`;
+  return `🔍 No instant result for "*${query}*".\n\nSearch online: https://google.com/search?q=${encodeURIComponent(query)}`;
 }
 
 const searchCommands = {
+
+  // ── Google / DuckDuckGo instant answers ─────────────
   google: {
     category: 'search', desc: 'Search Google / DuckDuckGo instant answers',
     usage: '.google <query>', aliases: ['search', 'ddg'], permissions: 'all',
@@ -22,16 +25,16 @@ const searchCommands = {
     exec: async (args, sock, jid) => {
       const q = args.join(' ').trim();
       if (!q) return sock.sendMessage(jid, { text: '❌ Usage: .google <query>' });
-      await sock.sendMessage(jid, { text: `🔍 Searching for: _"${q}"_...` });
+      await sock.sendMessage(jid, { text: `🔍 Searching: _"${q}"_...` });
       try {
-        const result = await googleSearch(q);
-        await sock.sendMessage(jid, { text: result });
+        await sock.sendMessage(jid, { text: await googleSearch(q) });
       } catch (err) {
         await sock.sendMessage(jid, { text: `❌ Search failed: ${err.message}` });
       }
     }
   },
 
+  // ── GitHub repository search ─────────────────────────
   github: {
     category: 'search', desc: 'Search GitHub repositories',
     usage: '.github <repo or user/repo>', aliases: [], permissions: 'all',
@@ -41,7 +44,6 @@ const searchCommands = {
       if (!q) return sock.sendMessage(jid, { text: '❌ Usage: .github <query or user/repo>' });
       await sock.sendMessage(jid, { text: `🐙 Searching GitHub: _"${q}"_...` });
       try {
-        // If query looks like user/repo, fetch it directly
         if (/^[\w.-]+\/[\w.-]+$/.test(q)) {
           const { data: r } = await axios.get(`https://api.github.com/repos/${q}`, { timeout: 10000 });
           await sock.sendMessage(jid, {
@@ -71,6 +73,7 @@ const searchCommands = {
     }
   },
 
+  // ── npm package search ───────────────────────────────
   npm: {
     category: 'search', desc: 'Search npm packages',
     usage: '.npm <package>', aliases: [], permissions: 'all',
@@ -93,12 +96,13 @@ const searchCommands = {
             `🔗 npm     : https://npmjs.com/package/${pkg.name}\n` +
             `⬇️  Install : npm i ${pkg.name}`
         });
-      } catch (err) {
+      } catch {
         await sock.sendMessage(jid, { text: `❌ Package not found: *${q}*` });
       }
     }
   },
 
+  // ── Weather (Open-Meteo, keyless) ───────────────────
   weather: {
     category: 'search', desc: 'Get current weather for a city',
     usage: '.weather <city>', aliases: [], permissions: 'all',
@@ -108,7 +112,6 @@ const searchCommands = {
       if (!city) return sock.sendMessage(jid, { text: '❌ Usage: .weather <city>' });
       await sock.sendMessage(jid, { text: `🌤️ Fetching weather for: _${city}_...` });
       try {
-        // Open-Meteo geocoding (free, no key)
         const geo = await axios.get('https://geocoding-api.open-meteo.com/v1/search', {
           params: { name: city, count: 1 }, timeout: 8000
         });
@@ -150,29 +153,92 @@ const searchCommands = {
     }
   },
 
+  // ── Song lyrics (api.lyrics.ovh — verified working) ──
+  // Previous implementation used lyrist.vercel.app which is blocked
+  // by Vercel's security checkpoint returning HTML instead of JSON.
   lyrics: {
     category: 'search', desc: 'Find song lyrics',
-    usage: '.lyrics <song name>', aliases: [], permissions: 'all',
-    examples: ['.lyrics Blinding Lights', '.lyrics Shape of You by Ed Sheeran'],
+    usage: '.lyrics <artist> - <song>', aliases: [], permissions: 'all',
+    examples: [
+      '.lyrics Eminem - Lose Yourself',
+      '.lyrics The Weeknd - Blinding Lights',
+      '.lyrics Ed Sheeran - Shape of You'
+    ],
     exec: async (args, sock, jid) => {
-      const q = args.join(' ').trim();
-      if (!q) return sock.sendMessage(jid, { text: '❌ Usage: .lyrics <song name>' });
-      await sock.sendMessage(jid, { text: `🎵 Searching lyrics for: _"${q}"_...` });
-      try {
-        const { data } = await axios.get(`https://lyrist.vercel.app/api/${encodeURIComponent(q)}`, { timeout: 15000 });
-        if (!data?.lyrics) throw new Error('Not found');
-        const snippet = data.lyrics.slice(0, 1200);
-        await sock.sendMessage(jid, {
-          text: `🎵 *${data.title}* — ${data.artist}\n\n${snippet}${data.lyrics.length > 1200 ? '\n\n_... (lyrics truncated)_' : ''}`
+      const input = args.join(' ').trim();
+      if (!input) {
+        return sock.sendMessage(jid, {
+          text: '❌ Usage: .lyrics <artist> - <song>\n\nExample: .lyrics Eminem - Lose Yourself'
         });
-      } catch {
+      }
+
+      // Parse "Artist - Song" or fall back to treating whole input as song name
+      let artist = '', title = input;
+      if (input.includes(' - ')) {
+        [artist, ...rest] = input.split(' - ');
+        title = rest.join(' - ').trim();
+        artist = artist.trim();
+      }
+
+      await sock.sendMessage(jid, { text: `🎵 Searching lyrics for: _"${input}"_...` });
+
+      try {
+        // api.lyrics.ovh requires artist + title separately
+        const encArtist = encodeURIComponent(artist || title);
+        const encTitle  = encodeURIComponent(artist ? title : '');
+
+        let data, tried = false;
+
+        // Attempt 1: artist + title (exact)
+        if (artist) {
+          try {
+            const res = await axios.get(
+              `https://api.lyrics.ovh/v1/${encArtist}/${encTitle}`,
+              { timeout: 15000 }
+            );
+            data = res.data;
+          } catch { /* fall through */ }
+        }
+
+        // Attempt 2: search endpoint (whole query as artist field)
+        if (!data?.lyrics && !tried) {
+          tried = true;
+          const res = await axios.get(
+            `https://api.lyrics.ovh/v1/${encodeURIComponent(input)}/${encodeURIComponent('')}`,
+            { timeout: 15000 }
+          ).catch(() => null);
+          if (res?.data?.lyrics) data = res.data;
+        }
+
+        if (!data?.lyrics) {
+          return sock.sendMessage(jid, {
+            text:
+              `❌ Lyrics not found for *${input}*.\n\n` +
+              `💡 Try the format: *.lyrics Artist - Song Title*\n` +
+              `Or search on: https://genius.com/search?q=${encodeURIComponent(input)}`
+          });
+        }
+
+        const snippet = data.lyrics.slice(0, 1500);
+        const truncated = data.lyrics.length > 1500;
+
         await sock.sendMessage(jid, {
-          text: `❌ Lyrics not found for *${q}*.\n\n💡 Try: https://genius.com/search?q=${encodeURIComponent(q)}`
+          text:
+            `🎵 *Lyrics*\n\n` +
+            `${snippet}` +
+            `${truncated ? '\n\n_... (lyrics truncated — too long to display in full)_' : ''}`
+        });
+      } catch (err) {
+        await sock.sendMessage(jid, {
+          text:
+            `❌ Lyrics search failed: ${err.message}\n\n` +
+            `💡 Try: https://genius.com/search?q=${encodeURIComponent(input)}`
         });
       }
     }
   },
 
+  // ── Movie info (OMDb free tier) ──────────────────────
   movie: {
     category: 'search', desc: 'Search for movie information',
     usage: '.movie <title>', aliases: ['film'], permissions: 'all',
@@ -182,7 +248,6 @@ const searchCommands = {
       if (!title) return sock.sendMessage(jid, { text: '❌ Usage: .movie <title>' });
       await sock.sendMessage(jid, { text: `🎬 Searching movie: _"${title}"_...` });
       try {
-        // OMDb API — free tier without key returns limited results
         const { data: m } = await axios.get('https://www.omdbapi.com/', {
           params: { t: title, apikey: 'trilogy', type: 'movie' },
           timeout: 10000
@@ -205,6 +270,7 @@ const searchCommands = {
     }
   },
 
+  // ── Pinterest (redirect — no usable API without auth) ─
   pinterest: {
     category: 'search', desc: 'Search Pinterest for images',
     usage: '.pinterest <query>', aliases: ['pin'], permissions: 'all',
@@ -217,7 +283,7 @@ const searchCommands = {
           `📌 *Pinterest Search*\n\n` +
           `🔍 Query: _"${q}"_\n\n` +
           `🔗 View results:\nhttps://pinterest.com/search/pins/?q=${encodeURIComponent(q)}\n\n` +
-          `_Pinterest requires login to access image API. Click the link above to browse._`
+          `_Pinterest's image API requires authentication. Click the link above to browse._`
       });
     }
   }
