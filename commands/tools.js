@@ -3,6 +3,8 @@
 const fs    = require('fs');
 const path  = require('path');
 const os    = require('os');
+const https = require('https');
+const http  = require('http');
 const axios = require('axios');
 const { downloadMediaMessage } = require('baileys');
 const { spawn } = require('child_process');
@@ -57,6 +59,111 @@ async function uploadToCatbox(buffer, filename, mimetype) {
   const text = await res.text();
   if (!text.startsWith('https://')) throw new Error('Upload failed: ' + text.slice(0, 100));
   return text.trim();
+}
+
+// ── Vyro AI (inferenceengine.vyro.ai) — free, no API key ──────────────────
+// Operations: 'enhance' | 'recolor' | 'dehaze'
+// Mirrors the okhttp/4.9.3 multipart request used by the reference repo.
+function vyroAiRequest(imageBuffer, operation) {
+  return new Promise((resolve, reject) => {
+    const boundary = `----FormBoundary${Date.now().toString(16)}`;
+
+    // model_version part — must come before image
+    const mvPart = Buffer.from(
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="model_version"\r\n` +
+      `Content-Transfer-Encoding: binary\r\n` +
+      `Content-Type: multipart/form-data; charset=utf-8\r\n\r\n` +
+      `1\r\n`
+    );
+    // image part header
+    const imgHeader = Buffer.from(
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="image"; filename="enhance_image_body.jpg"\r\n` +
+      `Content-Type: image/jpeg\r\n\r\n`
+    );
+    const imgFooter = Buffer.from(`\r\n--${boundary}--\r\n`);
+
+    const body = Buffer.concat([mvPart, imgHeader, imageBuffer, imgFooter]);
+
+    const options = {
+      hostname: 'inferenceengine.vyro.ai',
+      path:     `/${operation}`,
+      method:   'POST',
+      headers:  {
+        'Content-Type':     `multipart/form-data; boundary=${boundary}`,
+        'Content-Length':   body.length,
+        'User-Agent':       'okhttp/4.9.3',
+        'Connection':       'Keep-Alive',
+        'Accept-Encoding':  'gzip'
+      }
+    };
+
+    const req = https.request(options, res => {
+      const chunks = [];
+      res.on('data',  c  => chunks.push(c));
+      res.on('end',   ()  => {
+        const result = Buffer.concat(chunks);
+        if (result.length < 200) return reject(new Error(`Vyro AI returned empty response (${result.length} bytes)`));
+        resolve(result);
+      });
+      res.on('error', reject);
+    });
+
+    req.on('error', reject);
+    req.setTimeout(60000, () => { req.destroy(); reject(new Error('Vyro AI timeout after 60 s')); });
+    req.write(body);
+    req.end();
+  });
+}
+
+// ── Remove background — free public fallback chain ────────────────────────
+// 1. api.theresav.biz.id (free, no key)
+// 2. api.nexray.eu.cc    (URL-based, free)
+// 3. api.princetechn.com (URL-based, free)
+async function removeBgFree(imageBuffer) {
+  // Attempt 1 — direct buffer upload to theresav API
+  try {
+    const fd = new FormData();
+    fd.append('image', new Blob([imageBuffer], { type: 'image/jpeg' }), 'image.jpg');
+    const res = await fetch('https://api.theresav.biz.id/tools/removebg', {
+      method:  'POST',
+      headers: { 'x-api-key': 'X4cCB' },
+      body:    fd,
+      signal:  AbortSignal.timeout(30000)
+    });
+    if (res.ok) {
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.length > 500) return buf;
+    }
+  } catch (_) {}
+
+  // Attempt 2 & 3 — upload to catbox first to get a public URL
+  const imgUrl = await uploadToCatbox(imageBuffer, `rmbg_${Date.now()}.jpg`, 'image/jpeg');
+
+  const urlApis = [
+    `https://api.nexray.eu.cc/tools/removebg?url=${encodeURIComponent(imgUrl)}`,
+    `https://api.princetechn.com/api/tools/removebg?apikey=prince&url=${encodeURIComponent(imgUrl)}`
+  ];
+
+  for (const apiUrl of urlApis) {
+    try {
+      const res = await fetch(apiUrl, { signal: AbortSignal.timeout(30000) });
+      if (!res.ok) continue;
+      const json = await res.json().catch(() => null);
+      // Different APIs return result in different fields
+      const resultUrl = json?.result || json?.url || json?.data?.url || json?.output;
+      if (resultUrl) {
+        const imgRes = await fetch(resultUrl, { signal: AbortSignal.timeout(20000) });
+        if (imgRes.ok) {
+          const buf = Buffer.from(await imgRes.arrayBuffer());
+          if (buf.length > 500) return buf;
+        }
+      }
+    } catch (_) {}
+  }
+
+  throw new Error('All background removal services failed. Try again later.');
 }
 
 // Convert any image buffer to WebP using ffmpeg (for stickers)
@@ -178,47 +285,29 @@ const toolsCommands = {
   },
 
   remini: {
-    category: 'sticker', desc: 'Enhance/upscale image quality with AI (reply to image)',
-    usage: '.remini', aliases: ['hd', 'enhance', 'upscale'], permissions: 'all',
-    examples: ['.remini (reply to a blurry image)'],
+    category: 'sticker', desc: 'Enhance/upscale image quality with AI — no API key needed (reply to image)',
+    usage: '.remini [enhance|recolor|dehaze]', aliases: ['hd'], permissions: 'all',
+    examples: ['.remini (reply to image)', '.remini recolor', '.remini dehaze'],
     exec: async (args, sock, jid, isGroup, sender, message) => {
       const ctx    = getCtx(message);
       const quoted = ctx?.quotedMessage;
       if (!quoted?.imageMessage) {
-        return sock.sendMessage(jid, { text: `✨ *AI Image Enhance*\n\nReply to an *image* with *.remini* to enhance its quality.` });
-      }
-      await sock.sendMessage(jid, { text: `✨ Enhancing image with AI...` });
-      try {
-        const buf = await dlQuoted(sock, jid, message, quoted);
-        const url = await uploadToCatbox(buf, `enhance_${Date.now()}.jpg`, 'image/jpeg');
-        // Use waifu2x-based free API (AnimeJanai / deep-image.ai free tier)
-        const { data } = await axios.post(
-          'https://api.deep-image.ai/rest_api/process_result',
-          { url, width: 0, height: 0, enhancements: ['denoise', 'sharpness'] },
-          { headers: { 'x-api-key': process.env.DEEPIMAGE_API_KEY || '' }, timeout: 60000 }
-        ).catch(async () => {
-          // Fallback: use waifu2x via a free public instance
-          const resp = await axios.get(
-            `https://waifu2x.udp.jp/api?style=art&noise=-1&scale=2&url=${encodeURIComponent(url)}`,
-            { responseType: 'arraybuffer', timeout: 60000 }
-          );
-          return { data: { status: 'ok', _buffer: resp.data } };
+        return sock.sendMessage(jid, {
+          text:
+            `✨ *Remini AI Image Enhancer*\n\n` +
+            `Reply to an image with:\n` +
+            `• *.remini* — enhance quality\n` +
+            `• *.remini recolor* — add color to B&W photos\n` +
+            `• *.remini dehaze* — remove fog/haze\n\n` +
+            `_Powered by Vyro AI — free, no API key needed_`
         });
-
-        if (data._buffer) {
-          await sock.sendMessage(jid, { image: Buffer.from(data._buffer), caption: `✨ *Enhanced Image*` });
-        } else if (data.result_url) {
-          await sock.sendMessage(jid, { image: { url: data.result_url }, caption: `✨ *Enhanced Image*` });
-        } else {
-          // Last resort: just re-send with a sharpening note
-          await sock.sendMessage(jid, {
-            text:
-              `✨ *Enhancement Note*\n\n` +
-              `To use AI enhancement, set the *DEEPIMAGE_API_KEY* environment variable.\n\n` +
-              `Get a free key at: https://deep-image.ai\n\n` +
-              `Or use: https://www.upscayl.org (desktop app, free & offline)`
-          });
-        }
+      }
+      const op = ['enhance', 'recolor', 'dehaze'].includes(args[0]) ? args[0] : 'enhance';
+      await sock.sendMessage(jid, { text: `✨ Enhancing image with AI (${op})...` });
+      try {
+        const buf    = await dlQuoted(sock, jid, message, quoted);
+        const result = await vyroAiRequest(buf, op);
+        await sock.sendMessage(jid, { image: result, caption: `✨ *AI Enhanced Image* (${op})` });
       } catch (err) {
         await sock.sendMessage(jid, { text: `❌ Enhancement failed: ${err.message}` });
       }
@@ -226,21 +315,42 @@ const toolsCommands = {
   },
 
   enhance: {
-    category: 'sticker', desc: 'Enhance image quality (alias for remini)',
-    usage: '.enhance', aliases: ['upscale'], permissions: 'all',
+    category: 'sticker', desc: 'Enhance image quality with AI (alias for remini)',
+    usage: '.enhance', aliases: [], permissions: 'all',
     examples: ['.enhance (reply to an image)'],
     exec: async (args, sock, jid, isGroup, sender, message) => toolsCommands.remini.exec(args, sock, jid, isGroup, sender, message)
   },
 
   upscale: {
-    category: 'sticker', desc: 'Upscale image resolution (alias for remini)',
+    category: 'sticker', desc: 'Upscale image resolution with AI (alias for remini)',
     usage: '.upscale', aliases: [], permissions: 'all',
     examples: ['.upscale (reply to an image)'],
     exec: async (args, sock, jid, isGroup, sender, message) => toolsCommands.remini.exec(args, sock, jid, isGroup, sender, message)
   },
 
+  dehaze: {
+    category: 'sticker', desc: 'Remove haze/fog from an image with AI (reply to image)',
+    usage: '.dehaze', aliases: [], permissions: 'all',
+    examples: ['.dehaze (reply to a hazy image)'],
+    exec: async (args, sock, jid, isGroup, sender, message) => {
+      const ctx    = getCtx(message);
+      const quoted = ctx?.quotedMessage;
+      if (!quoted?.imageMessage) {
+        return sock.sendMessage(jid, { text: `🌫️ *Dehaze Image*\n\nReply to a *hazy or foggy image* with *.dehaze* to clear it up.` });
+      }
+      await sock.sendMessage(jid, { text: `🌫️ Removing haze with AI...` });
+      try {
+        const buf    = await dlQuoted(sock, jid, message, quoted);
+        const result = await vyroAiRequest(buf, 'dehaze');
+        await sock.sendMessage(jid, { image: result, caption: `🌫️ *Dehazed Image*` });
+      } catch (err) {
+        await sock.sendMessage(jid, { text: `❌ Dehaze failed: ${err.message}` });
+      }
+    }
+  },
+
   removebg: {
-    category: 'sticker', desc: 'Remove image background (reply to image)',
+    category: 'sticker', desc: 'Remove image background — free, no API key (reply to image)',
     usage: '.removebg', aliases: ['rmbg'], permissions: 'all',
     examples: ['.removebg (reply to an image)'],
     exec: async (args, sock, jid, isGroup, sender, message) => {
@@ -251,47 +361,8 @@ const toolsCommands = {
       }
       await sock.sendMessage(jid, { text: `🎨 Removing background...` });
       try {
-        const buf = await dlQuoted(sock, jid, message, quoted);
-        const key = process.env.REMOVEBG_API_KEY;
-        if (!key) {
-          // Try free alternative: photoroom.com API
-          const pKey = process.env.PHOTOROOM_API_KEY;
-          if (pKey) {
-            const fd = new FormData();
-            fd.append('image_file', new Blob([buf], { type: 'image/jpeg' }), 'image.jpg');
-            const res = await fetch('https://sdk.photoroom.com/v1/segment', {
-              method:  'POST',
-              headers: { 'x-api-key': pKey },
-              body:    fd,
-              signal:  AbortSignal.timeout(60000)
-            });
-            if (!res.ok) throw new Error(`Photoroom error ${res.status}`);
-            const resultBuf = Buffer.from(await res.arrayBuffer());
-            return sock.sendMessage(jid, { image: resultBuf, caption: `🎨 *Background Removed!*`, mimetype: 'image/png' });
-          }
-          return sock.sendMessage(jid, {
-            text:
-              `🎨 *Remove Background*\n\n` +
-              `To use this command, set one of these environment variables in your *.env* file:\n\n` +
-              `• *REMOVEBG_API_KEY* — get free at https://www.remove.bg/api\n` +
-              `• *PHOTOROOM_API_KEY* — get free at https://www.photoroom.com/api\n\n` +
-              `Free tiers give 50 images/month.`
-          });
-        }
-        const fd = new FormData();
-        fd.append('image_file', new Blob([buf], { type: 'image/jpeg' }), 'image.jpg');
-        fd.append('size', 'auto');
-        const res  = await fetch('https://api.remove.bg/v1.0/removebg', {
-          method:  'POST',
-          headers: { 'X-Api-Key': key },
-          body:    fd,
-          signal:  AbortSignal.timeout(60000)
-        });
-        if (!res.ok) {
-          const errText = await res.text();
-          throw new Error(`remove.bg error ${res.status}: ${errText.slice(0, 100)}`);
-        }
-        const resultBuf = Buffer.from(await res.arrayBuffer());
+        const buf       = await dlQuoted(sock, jid, message, quoted);
+        const resultBuf = await removeBgFree(buf);
         await sock.sendMessage(jid, { image: resultBuf, caption: `🎨 *Background Removed!*`, mimetype: 'image/png' });
       } catch (err) {
         await sock.sendMessage(jid, { text: `❌ Background removal failed: ${err.message}` });
@@ -355,36 +426,22 @@ const toolsCommands = {
   },
 
   colorize: {
-    category: 'sticker', desc: 'Colorize a black & white image (reply to image)',
-    usage: '.colorize', aliases: [], permissions: 'all',
+    category: 'sticker', desc: 'Colorize a black & white image with AI — no API key (reply to image)',
+    usage: '.colorize', aliases: ['recolor'], permissions: 'all',
     examples: ['.colorize (reply to a B&W image)'],
     exec: async (args, sock, jid, isGroup, sender, message) => {
       const ctx    = getCtx(message);
       const quoted = ctx?.quotedMessage;
       if (!quoted?.imageMessage) {
-        return sock.sendMessage(jid, { text: `🎨 *Colorize Image*\n\nReply to a *black & white image* with *.colorize*.` });
+        return sock.sendMessage(jid, { text: `🎨 *Colorize Image*\n\nReply to a *black & white image* with *.colorize*.\n\n_Powered by Vyro AI — free, no API key needed_` });
       }
-      await sock.sendMessage(jid, { text: `🎨 Colorizing image...` });
+      await sock.sendMessage(jid, { text: `🎨 Colorizing image with AI...` });
       try {
-        const buf = await dlQuoted(sock, jid, message, quoted);
-        const imgUrl = await uploadToCatbox(buf, `bw_${Date.now()}.jpg`, 'image/jpeg');
-        // Use DeepAI colorizer (free tier, no key required for basic)
-        const fd = new FormData();
-        fd.append('image', imgUrl);
-        const res  = await fetch('https://api.deepai.org/api/colorizer', {
-          method:  'POST',
-          headers: { 'api-key': process.env.DEEPAI_API_KEY || 'quickstart-QUdJIGlzIGF3ZXNvbWU' },
-          body:    fd,
-          signal:  AbortSignal.timeout(60000)
-        });
-        const json = await res.json();
-        if (json?.output_url) {
-          await sock.sendMessage(jid, { image: { url: json.output_url }, caption: `🎨 *Colorized Image*` });
-        } else {
-          throw new Error(json?.status || 'Colorization failed');
-        }
+        const buf    = await dlQuoted(sock, jid, message, quoted);
+        const result = await vyroAiRequest(buf, 'recolor');
+        await sock.sendMessage(jid, { image: result, caption: `🎨 *AI Colorized Image*` });
       } catch (err) {
-        await sock.sendMessage(jid, { text: `❌ Colorize failed: ${err.message}\n\nSet *DEEPAI_API_KEY* in .env for reliable access.` });
+        await sock.sendMessage(jid, { text: `❌ Colorize failed: ${err.message}` });
       }
     }
   },

@@ -1,5 +1,6 @@
 'use strict';
 // commands/group.js — Group management + protection toggles
+const { downloadMediaMessage } = require('baileys');
 const db = require('../lib/database');
 const { getMentionedJid, isGroupAdmin, normalizeJid, toggleEmoji, resolveIsOwner } = require('../lib/helpers');
 
@@ -266,7 +267,24 @@ const groupCommands = {
       if (!quoted?.imageMessage) {
         return sock.sendMessage(jid, { text: '🖼️ Reply to an *image* with *.setpp* to set it as the group picture.' });
       }
-      await sock.sendMessage(jid, { text: `🖼️ Setting group profile picture...\n\n_Requires downloading the image. Coming soon._` });
+      await sock.sendMessage(jid, { text: `🖼️ Setting group profile picture...` });
+      try {
+        const ctx = message.message?.extendedTextMessage?.contextInfo;
+        const fake = {
+          key: {
+            remoteJid:   jid,
+            id:          ctx?.stanzaId || message.key.id,
+            participant: ctx?.participant || message.key.participant,
+            fromMe:      false
+          },
+          message: quoted
+        };
+        const buf = await downloadMediaMessage(fake, 'buffer', { reuploadRequest: sock.updateMediaMessage });
+        await sock.updateProfilePicture(jid, buf);
+        await sock.sendMessage(jid, { text: `✅ *Group profile picture updated!*` });
+      } catch (err) {
+        await sock.sendMessage(jid, { text: `❌ Failed to set group picture: ${err.message}\n\n_Make sure the bot is an admin._` });
+      }
     }
   },
 

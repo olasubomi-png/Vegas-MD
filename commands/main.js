@@ -2,6 +2,9 @@
 // commands/main.js — Premium menu UI  (architecture unchanged)
 const fs   = require('fs');
 const path = require('path');
+
+// Path to menu banner image (the purple Goku/OLASUBOMI-MD picture)
+const MENU_IMAGE_PATH = path.join(__dirname, '..', 'assets', 'menu.jpg');
 const db   = require('../lib/database');
 
 // ── Version from package.json ─────────────────────────────
@@ -225,7 +228,17 @@ const mainCommands = {
       }
 
       const text = buildMainMenu(cfg, allCmds, catReg, catOrder);
-      await sock.sendMessage(jid, { text });
+
+      // Send menu with the banner image if it exists, otherwise text-only
+      if (fs.existsSync(MENU_IMAGE_PATH)) {
+        await sock.sendMessage(jid, {
+          image:   fs.readFileSync(MENU_IMAGE_PATH),
+          caption: text,
+          mimetype: 'image/jpeg'
+        });
+      } else {
+        await sock.sendMessage(jid, { text });
+      }
     }
   },
 

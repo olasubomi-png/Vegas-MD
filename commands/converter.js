@@ -241,6 +241,79 @@ const converterCommands = {
         await sock.sendMessage(jid, { text: `❌ QR read failed: ${err.message}` });
       }
     }
+  },
+
+  tts: {
+    category: 'converter', desc: 'Convert text to a voice note (text-to-speech)',
+    usage: '.tts [lang] <text>', aliases: ['say', 'speak'], permissions: 'all',
+    examples: ['.tts Hello world', '.tts es Hola mundo', '.tts fr Bonjour le monde'],
+    exec: async (args, sock, jid) => {
+      if (!args.length) {
+        return sock.sendMessage(jid, {
+          text:
+            `🔊 *Text to Speech*\n\n` +
+            `Usage: *.tts [language code] <your text>*\n\n` +
+            `Examples:\n` +
+            `• *.tts Hello world* (English)\n` +
+            `• *.tts es Hola mundo* (Spanish)\n` +
+            `• *.tts fr Bonjour* (French)\n` +
+            `• *.tts ar مرحبا* (Arabic)\n\n` +
+            `_Supports any language code that Google Translate recognises_`
+        });
+      }
+
+      // Detect optional language code (2-letter prefix like "es", "fr", "ar" …)
+      const LANG_RE = /^[a-z]{2}(-[A-Z]{2})?$/;
+      let lang = 'en';
+      let text;
+      if (LANG_RE.test(args[0]) && args.length > 1) {
+        lang = args[0];
+        text = args.slice(1).join(' ');
+      } else {
+        text = args.join(' ');
+      }
+
+      if (!text.trim()) return sock.sendMessage(jid, { text: '❌ Please provide some text.' });
+
+      await sock.sendMessage(jid, { text: `🔊 Converting to speech...` });
+
+      // Try multiple free TTS services in order
+      const encodedText = encodeURIComponent(text.slice(0, 200)); // Google TTS ~200 char limit
+      const services = [
+        // Google Translate TTS (client=tw-ob — no login needed)
+        `https://translate.google.com/translate_tts?ie=UTF-8&tl=${lang}&client=tw-ob&q=${encodedText}`,
+        // StreamElements (Brian voice, English only)
+        `https://api.streamelements.com/kappa/v2/speech?voice=Brian&text=${encodedText}`,
+        // Google Translate TTS alternative client
+        `https://translate.google.com/translate_tts?ie=UTF-8&tl=${lang}&client=gtx&q=${encodedText}`
+      ];
+
+      let audioBuf = null;
+      for (const url of services) {
+        try {
+          const res = await fetch(url, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/91.0.4472.120 Mobile Safari/537.36',
+              'Referer':    'https://translate.google.com/'
+            },
+            signal: AbortSignal.timeout(15000)
+          });
+          if (!res.ok) continue;
+          const buf = Buffer.from(await res.arrayBuffer());
+          if (buf.length > 1000) { audioBuf = buf; break; }
+        } catch (_) {}
+      }
+
+      if (!audioBuf) {
+        return sock.sendMessage(jid, { text: `❌ TTS failed. Please try again.` });
+      }
+
+      await sock.sendMessage(jid, {
+        audio:    audioBuf,
+        mimetype: 'audio/mpeg',
+        ptt:      true,  // sends as voice note
+      });
+    }
   }
 };
 
