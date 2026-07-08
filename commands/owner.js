@@ -482,6 +482,47 @@ const ownerCommands = {
     })
   },
 
+  pair: {
+    category: 'owner', desc: 'Add a new WhatsApp number as a secondary bot session',
+    usage: '.pair <number>', aliases: [], permissions: 'owner',
+    examples: ['.pair 2349112097911'],
+    exec: ownerOnly(async (args, sock, jid) => {
+      const raw    = args[0] || '';
+      const number = raw.replace(/\D/g, '');
+
+      if (!number) {
+        return sock.sendMessage(jid, {
+          text:
+            `📱 *Multi-Session Pairing*\n\n` +
+            `Usage: *.pair <number>*\n\n` +
+            `Example:\n  *.pair 2349112097911*\n\n` +
+            `_Include country code, no + or spaces._\n` +
+            `_The pairing code will be sent here._`
+        });
+      }
+
+      await sock.sendMessage(jid, {
+        text: `⏳ Starting new session for *+${number}*...\nThe pairing code will appear here shortly.`
+      });
+
+      try {
+        const sessionManager = require('../lib/sessionManager');
+        const result = await sessionManager.addSession(number, { notifyJid: jid, primarySock: sock });
+
+        if (result.alreadyConnected) {
+          await sock.sendMessage(jid, {
+            text: `✅ *+${number}* is already connected as a secondary session.`
+          });
+        }
+        // Pairing code is sent automatically by sessionManager when the QR fires
+      } catch (err) {
+        await sock.sendMessage(jid, {
+          text: `❌ *Failed to start session for +${number}*\n\n${err.message}`
+        });
+      }
+    })
+  },
+
   unpair: {
     category: 'owner', desc: 'Remove a secondary session / disconnect a paired number',
     usage: '.unpair <number>', aliases: ['removesession'], permissions: 'owner',
