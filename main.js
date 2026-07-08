@@ -163,10 +163,12 @@ const { handleParticipantUpdate } = require('./events/welcome');
 const {
   cacheMessage,
   handleAntiDelete,
+  handleAntiDeleteRevocation,
   handleAntiLink,
   handleAntiSpam,
   handleAntiViewOnce,
-  handleAutoReact
+  handleAutoReact,
+  handleAntiCall,
 } = require('./events/protection');
 const { handleStatusUpdate } = require('./events/autoStatus');
 const allCommands    = require('./commands/index');
@@ -699,6 +701,16 @@ function attachHandlers(sock, saveCreds) {
 
           cacheMessage(message);
 
+          // ── Protocol REVOKE = "delete for everyone" ───────────────
+          // This is how WhatsApp delivers user-initiated deletions.
+          // Route them to anti-delete BEFORE any other processing.
+          if (message.message?.protocolMessage?.type === 0) {
+            await handleAntiDeleteRevocation(sock, message).catch(e =>
+              console.error('[handler] antiDeleteRevocation:', e.message)
+            );
+            continue; // protocol messages are not commands
+          }
+
           // ── fromMe handling ───────────────────────────────────────
           // fromMe=true means the bot's own WhatsApp account sent this
           // message.  Two cases:
@@ -784,6 +796,13 @@ function attachHandlers(sock, saveCreds) {
       const keys = events['messages.delete'].keys || [];
       await handleAntiDelete(sock, keys).catch(e =>
         console.error('[handler] antiDelete:', e.message)
+      );
+    }
+
+    // ── Incoming calls (anti-call / anti-video-call) ──────
+    if (events['call']) {
+      await handleAntiCall(sock, events['call']).catch(e =>
+        console.error('[handler] antiCall:', e.message)
       );
     }
 

@@ -2,22 +2,6 @@
 // commands/group.js — Group management + protection toggles
 const db = require('../lib/database');
 const { getMentionedJid, isGroupAdmin, normalizeJid, toggleEmoji, resolveIsOwner } = require('../lib/helpers');
-const { downloadMediaMessage } = require('baileys');
-
-// Helper: pull contextInfo from any message type (Baileys v7)
-function getCtx(message) {
-  const msg = message?.message;
-  if (!msg) return null;
-  return (
-    msg.extendedTextMessage?.contextInfo ||
-    msg.imageMessage?.contextInfo        ||
-    msg.videoMessage?.contextInfo        ||
-    msg.audioMessage?.contextInfo        ||
-    msg.stickerMessage?.contextInfo      ||
-    msg.documentMessage?.contextInfo     ||
-    null
-  );
-}
 
 async function requireAdmin(sock, jid, isGroup, sender, message, botConfig) {
   if (!isGroup) {
@@ -200,7 +184,7 @@ const groupCommands = {
 
   groupsettings: {
     category: 'group', desc: 'View all group protection settings',
-    usage: '.groupsettings', aliases: [], permissions: 'all',
+    usage: '.groupsettings', aliases: ['settings'], permissions: 'all',
     examples: ['.groupsettings'],
     exec: async (args, sock, jid, isGroup) => {
       if (!isGroup) return sock.sendMessage(jid, { text: '❌ Groups only.' });
@@ -272,76 +256,113 @@ const groupCommands = {
     }
   },
 
-  // .setgpp — set GROUP profile picture (distinct from .setpp which sets the BOT's picture)
-  setgpp: {
+  setpp: {
     category: 'group', desc: 'Change the group profile picture (reply to an image)',
-    usage: '.setgpp', aliases: ['gcpp'], permissions: 'admin',
-    examples: ['.setgpp (reply to an image)'],
+    usage: '.setpp', aliases: [], permissions: 'admin',
+    examples: ['.setpp (reply to an image)'],
     exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
       if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
-      const ctx    = getCtx(message);
-      const quoted = ctx?.quotedMessage;
+      const quoted = message.message?.extendedTextMessage?.contextInfo?.quotedMessage;
       if (!quoted?.imageMessage) {
-        return sock.sendMessage(jid, { text: '🖼️ *Set Group Picture*\n\nReply to an *image* with *.setgpp* to set it as the group profile picture.' });
+        return sock.sendMessage(jid, { text: '🖼️ Reply to an *image* with *.setpp* to set it as the group picture.' });
       }
-      await sock.sendMessage(jid, { text: `🖼️ Updating group profile picture...` });
-      try {
-        const fakeMsg = {
-          key:     { remoteJid: jid, id: ctx.stanzaId || message.key.id, participant: ctx.participant, fromMe: false },
-          message: quoted
-        };
-        const buffer = await downloadMediaMessage(fakeMsg, 'buffer', { reuploadRequest: sock.updateMediaMessage });
-        await sock.updateProfilePicture(jid, buffer);
-        await sock.sendMessage(jid, { text: `✅ *Group profile picture updated!*` });
-      } catch (err) {
-        await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
-      }
+      await sock.sendMessage(jid, { text: `🖼️ Setting group profile picture...\n\n_Requires downloading the image. Coming soon._` });
     }
   },
 
-  // .delete — delete a replied-to message from the chat (groups + DMs)
-  delete: {
-    category: 'group', desc: 'Delete a replied message',
-    usage: '.delete', aliases: ['del'], permissions: 'admin',
-    examples: ['.delete (reply to the message you want to delete)'],
-    exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
-      // Groups: require admin. DMs: owner-only (no admins in DMs).
-      if (isGroup) {
-        if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
-      } else {
-        if (!resolveIsOwner(message, sender, botConfig)) {
-          return sock.sendMessage(jid, { text: '❌ Only the bot owner can use .delete in DMs.' });
-        }
-      }
-      const ctx = getCtx(message);
-      if (!ctx?.stanzaId) {
-        return sock.sendMessage(jid, { text: '🗑️ *Delete Message*\n\nReply to the message you want to delete with *.delete*.' });
-      }
-      try {
-        // Delete the target message
-        const targetKey = {
-          remoteJid:   jid,
-          id:          ctx.stanzaId,
-          participant: ctx.participant || undefined,
-          fromMe:      ctx.participant ? false : true  // DMs: target is fromMe; groups: target is from participant
-        };
-        await sock.sendMessage(jid, { delete: targetKey });
-        // Also clean up the .delete command message itself
-        await sock.sendMessage(jid, { delete: message.key });
-      } catch (err) {
-        await sock.sendMessage(jid, { text: `❌ Failed to delete: ${err.message}` });
-      }
-    }
-  },
-
-  // ─── Protection toggles ───────────────────────────────────
+  // ─── Simple toggles ───────────────────────────────────────
   welcome:      makeToggle('welcome',     'Welcome messages', '👋'),
   goodbye:      makeToggle('goodbye',     'Goodbye messages', '🚪'),
-  antilink:     makeToggle('antiLink',    'Anti-link',        '🔗'),
-  antideletegrp: makeToggle('antiDelete',  'Anti-delete (this group)',  '🗑️'),
+  antidelete:   makeToggle('antiDelete',  'Anti-delete',      '🗑️'),
   antispam:     makeToggle('antiSpam',    'Anti-spam',        '🚨'),
   antiviewonce: makeToggle('antiViewOnce','Anti-view-once',   '👁️'),
   autoreact:    makeToggle('autoReact',   'Auto-react',       '❤️'),
+
+  // ─── Antilink (on / off / set <action> / status) ─────────
+  antilink: {
+    category: 'group',
+    desc: 'Configure anti-link protection (on/off/set delete|kick|warn/status)',
+    usage: '.antilink <on|off|set delete|kick|warn|status>',
+    aliases: [],
+    permissions: 'admin',
+    examples: [
+      '.antilink on',
+      '.antilink off',
+      '.antilink set kick',
+      '.antilink set warn',
+      '.antilink set delete',
+      '.antilink status'
+    ],
+    exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
+      if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
+
+      const sub    = (args[0] || '').toLowerCase();
+      const prefix = (botConfig || global.botConfig)?.prefix || '.';
+
+      // ── Status ───────────────────────────────────────────
+      if (!sub || sub === 'status') {
+        const g      = db.getGroup(jid);
+        const state  = g.antiLink ? '✅ Enabled' : '❌ Disabled';
+        const action = g.antiLinkAction || 'delete';
+        return sock.sendMessage(jid, {
+          text:
+            `🔗 *Anti-Link Status*\n\n` +
+            `State  : ${state}\n` +
+            `Action : *${action}*\n\n` +
+            `_${prefix}antilink on/off  ·  ${prefix}antilink set delete|kick|warn_`
+        });
+      }
+
+      // ── On / Off ─────────────────────────────────────────
+      if (sub === 'on') {
+        db.updateGroup(jid, { antiLink: true });
+        const action = db.getGroup(jid).antiLinkAction || 'delete';
+        return sock.sendMessage(jid, {
+          text: `🔗 *Anti-Link: ✅ Enabled*\nAction: *${action}*\n\n_Change action with: ${prefix}antilink set delete|kick|warn_`
+        });
+      }
+
+      if (sub === 'off') {
+        db.updateGroup(jid, { antiLink: false });
+        return sock.sendMessage(jid, { text: '🔗 *Anti-Link: ❌ Disabled*' });
+      }
+
+      // ── Set action ───────────────────────────────────────
+      if (sub === 'set') {
+        const action = (args[1] || '').toLowerCase();
+        if (!['delete', 'kick', 'warn'].includes(action)) {
+          return sock.sendMessage(jid, {
+            text:
+              `❌ Invalid action. Choose one:\n\n` +
+              `• *delete* — remove link, notify only\n` +
+              `• *kick*   — remove link + kick sender immediately\n` +
+              `• *warn*   — remove link + warn (kick at max warnings)\n\n` +
+              `Usage: *${prefix}antilink set delete|kick|warn*`
+          });
+        }
+        db.updateGroup(jid, { antiLinkAction: action, antiLink: true });
+        const descriptions = {
+          delete: 'Link removed, sender notified.',
+          kick:   'Link removed, sender immediately kicked.',
+          warn:   `Link removed, sender warned (kicked at ${db.getGroup(jid).maxWarnings || 3} warnings).`
+        };
+        return sock.sendMessage(jid, {
+          text:
+            `🔗 *Anti-Link Updated*\n\n` +
+            `Action : *${action.toUpperCase()}*\n` +
+            `Effect : ${descriptions[action]}\n` +
+            `State  : ✅ Enabled`
+        });
+      }
+
+      // ── Unknown sub-command ───────────────────────────────
+      return sock.sendMessage(jid, {
+        text:
+          `❓ Unknown sub-command.\n\n` +
+          `Usage: *${prefix}antilink <on|off|set delete|kick|warn|status>*`
+      });
+    }
+  },
 };
 
 module.exports = groupCommands;

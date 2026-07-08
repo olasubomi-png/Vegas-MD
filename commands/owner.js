@@ -215,13 +215,95 @@ const ownerCommands = {
   },
 
   anticall: {
-    category: 'owner', desc: 'Toggle auto-rejecting incoming calls',
-    usage: '.anticall', aliases: [], permissions: 'owner',
-    examples: ['.anticall'],
+    category: 'owner',
+    desc: 'Block/reject incoming voice calls (on/off/status/cut/block)',
+    usage: '.anticall <on|off|status|cut|block>',
+    aliases: [],
+    permissions: 'owner',
+    examples: ['.anticall on', '.anticall off', '.anticall block', '.anticall cut', '.anticall status'],
     exec: ownerOnly(async (args, sock, jid) => {
-      const v = !db.getSetting('antiCall', false);
-      db.setSetting('antiCall', v);
-      await sock.sendMessage(jid, { text: `📵 Anti-Call: ${v ? '✅ Enabled — calls will be rejected' : '❌ Disabled'}` });
+      const sub  = (args[0] || '').toLowerCase();
+      const mode = db.getSetting('antiCallMode',  'cut');
+
+      if (!sub || sub === 'status') {
+        const voiceOn = db.getSetting('antiCall',     false);
+        const videoOn = db.getSetting('antiVideoCall', false);
+        return sock.sendMessage(jid, {
+          text:
+            `┏━━〔 📵 *Anti-Call Status* 〕━━┓\n` +
+            `┃ 🔊 Voice calls  : ${voiceOn ? '✅ Blocked' : '❌ Allowed'}\n` +
+            `┃ 📹 Video calls  : ${videoOn ? '✅ Blocked' : '❌ Allowed'}\n` +
+            `┃ ⚙️  Mode         : ${mode.toUpperCase()}\n` +
+            `┗━━━━━━━━━━━━━━━━━━━━━━━┛\n\n` +
+            `_cut = reject only  ·  block = reject + block caller_\n` +
+            `_.anticall on/off  ·  .anticall cut/block_`
+        });
+      }
+
+      if (sub === 'on') {
+        db.setSetting('antiCall', true);
+        return sock.sendMessage(jid, {
+          text: `📵 *Anti-Call (Voice): ✅ Enabled*\nMode: *${mode.toUpperCase()}*\n\nAll voice calls will be automatically rejected.`
+        });
+      }
+
+      if (sub === 'off') {
+        db.setSetting('antiCall', false);
+        return sock.sendMessage(jid, { text: '📵 *Anti-Call (Voice): ❌ Disabled*' });
+      }
+
+      if (sub === 'cut') {
+        db.setSetting('antiCallMode', 'cut');
+        return sock.sendMessage(jid, { text: '📵 *Anti-Call mode: CUT*\n\nCalls will be rejected only (caller not blocked).' });
+      }
+
+      if (sub === 'block') {
+        db.setSetting('antiCallMode', 'block');
+        return sock.sendMessage(jid, { text: '📵 *Anti-Call mode: BLOCK*\n\nCalls will be rejected and the caller will be blocked.' });
+      }
+
+      return sock.sendMessage(jid, {
+        text: '❓ Usage: *.anticall <on|off|status|cut|block>*'
+      });
+    })
+  },
+
+  antivideocall: {
+    category: 'owner',
+    desc: 'Block/reject incoming video calls (on/off/status)',
+    usage: '.antivideocall <on|off|status>',
+    aliases: ['antivc'],
+    permissions: 'owner',
+    examples: ['.antivideocall on', '.antivideocall off', '.antivideocall status'],
+    exec: ownerOnly(async (args, sock, jid) => {
+      const sub  = (args[0] || '').toLowerCase();
+      const mode = db.getSetting('antiCallMode', 'cut');
+
+      if (!sub || sub === 'status') {
+        const videoOn = db.getSetting('antiVideoCall', false);
+        return sock.sendMessage(jid, {
+          text:
+            `📹 *Anti-Video-Call: ${videoOn ? '✅ Enabled' : '❌ Disabled'}*\n` +
+            `Mode: *${mode.toUpperCase()}*\n\n` +
+            `_.antivideocall on/off_`
+        });
+      }
+
+      if (sub === 'on') {
+        db.setSetting('antiVideoCall', true);
+        return sock.sendMessage(jid, {
+          text: `📹 *Anti-Video-Call: ✅ Enabled*\nMode: *${mode.toUpperCase()}*\n\nAll video calls will be automatically rejected.`
+        });
+      }
+
+      if (sub === 'off') {
+        db.setSetting('antiVideoCall', false);
+        return sock.sendMessage(jid, { text: '📹 *Anti-Video-Call: ❌ Disabled*' });
+      }
+
+      return sock.sendMessage(jid, {
+        text: '❓ Usage: *.antivideocall <on|off|status>*'
+      });
     })
   },
 
