@@ -42,20 +42,29 @@ function cacheMessage(message) {
     msg.viewOnceMessageV2Extension?.message    ||
     msg;
 
-  // Detect media type so anti-delete can re-post the right kind
+  // Detect media type against the UNWRAPPED inner payload
+  // so ephemeral/disappearing messages are cached correctly.
   let text      = '';
   let mediaType = null; // 'image' | 'video' | 'audio' | 'sticker' | 'document' | null
 
-  if      (msg.conversation)                       text = msg.conversation;
-  else if (msg.extendedTextMessage?.text)           text = msg.extendedTextMessage.text;
-  else if (msg.imageMessage)                        { mediaType = 'image';    text = msg.imageMessage.caption   || ''; }
-  else if (msg.videoMessage)                        { mediaType = 'video';    text = msg.videoMessage.caption   || ''; }
-  else if (msg.audioMessage)                        { mediaType = 'audio';    text = '[Voice/Audio]'; }
-  else if (msg.stickerMessage)                      { mediaType = 'sticker';  text = '[Sticker]'; }
-  else if (msg.documentMessage)                     { mediaType = 'document'; text = msg.documentMessage.fileName || '[Document]'; }
-  else                                              text = '[Media]';
+  if      (inner.conversation)                       text = inner.conversation;
+  else if (inner.extendedTextMessage?.text)           text = inner.extendedTextMessage.text;
+  else if (inner.imageMessage)                        { mediaType = 'image';    text = inner.imageMessage.caption   || ''; }
+  else if (inner.videoMessage)                        { mediaType = 'video';    text = inner.videoMessage.caption   || ''; }
+  else if (inner.audioMessage)                        { mediaType = 'audio';    text = '[Voice/Audio]'; }
+  else if (inner.stickerMessage)                      { mediaType = 'sticker';  text = '[Sticker]'; }
+  else if (inner.documentMessage)                     { mediaType = 'document'; text = inner.documentMessage.fileName || '[Document]'; }
+  else                                                text = '[Media]';
 
-  msgCache.set(id, { jid, sender, text, mediaType, rawMessage: message, ts: Date.now() });
+  // Store the raw message node that corresponds to inner for download.
+  // If inner === msg the raw message is the original; otherwise we need
+  // a synthetic node pointing at the unwrapped content so that
+  // downloadMediaMessage receives the right payload.
+  const rawNode = (inner === msg)
+    ? message
+    : { key: message.key, message: inner };
+
+  msgCache.set(id, { jid, sender, text, mediaType, rawMessage: rawNode, ts: Date.now() });
 
   // Evict oldest entries when cache is full
   if (msgCache.size > MAX_CACHE) {
@@ -205,23 +214,25 @@ async function handleAntiLink(sock, message, botConfig) {
   if (senderIsAdmin) return false;
 
   const action     = settings.antiLinkAction || 'delete'; // 'delete' | 'kick' | 'warn'
-  const count      = db.addWarning(sender);
   const maxWarn    = settings.maxWarnings || 3;
   const senderName = sender.split('@')[0];
 
   try {
-    // Always delete the message first
+    // Always delete the offending message first
     await sock.sendMessage(jid, { delete: message.key });
 
     if (action === 'kick') {
+      // Immediate removal — no warning counter touched
       await sock.groupParticipantsUpdate(jid, [sender], 'remove');
       await sock.sendMessage(jid, {
         text:     `🔗 *Anti-Link*\n\n@${senderName} sent a link and was *kicked*.`,
         mentions: [sender]
       });
-      db.clearWarnings(sender);
 
     } else if (action === 'warn') {
+      // Only increment warnings in warn mode — prevents hidden buildup
+      // when the action is later changed to 'delete' or 'kick'
+      const count = db.addWarning(sender);
       await sock.sendMessage(jid, {
         text:     `🔗 *Anti-Link*\n\n@${senderName} sent a link.\n⚠️ Warning: ${count}/${maxWarn}`,
         mentions: [sender]
@@ -236,7 +247,7 @@ async function handleAntiLink(sock, message, botConfig) {
       }
 
     } else {
-      // 'delete' — remove message and notify only
+      // 'delete' — remove message and notify; no warning recorded
       await sock.sendMessage(jid, {
         text:     `🔗 *Anti-Link*\n\n@${senderName} sent a link and it was removed.`,
         mentions: [sender]
