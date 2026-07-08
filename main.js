@@ -870,10 +870,9 @@ async function handleCommand(command, args, message, sock, botConfig) {
   console.log(`[cmd]   registered commands (${registeredNames.length}): ${registeredNames.join(', ')}`);
   const cmd = allCommands[command];
   if (!cmd) {
-    console.log(`[cmd]   command ".${command}" NOT FOUND in registry`);
-    return sock.sendMessage(jid, {
-      text: `❌ Unknown command: *${command}*\nType *${botConfig.prefix}menu* for help.`
-    });
+    // Silently ignore — prefix present but no matching command
+    console.log(`[cmd]   command ".${command}" NOT FOUND — ignoring silently`);
+    return;
   }
   console.log(`[cmd]   command ".${command}" FOUND — exec type: ${typeof cmd.exec}`);
 
