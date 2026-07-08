@@ -487,6 +487,13 @@ const ownerCommands = {
     usage: '.pair <number>', aliases: [], permissions: 'owner',
     examples: ['.pair 2349112097911'],
     exec: ownerOnly(async (args, sock, jid) => {
+      // Secondary sessions have sock._id >= 1001; block them here
+      if (sock._id >= 1001) {
+        return sock.sendMessage(jid, {
+          text: '🔒 This command can only be run from the *primary* bot number.'
+        });
+      }
+
       const raw    = args[0] || '';
       const number = raw.replace(/\D/g, '');
 
@@ -528,6 +535,13 @@ const ownerCommands = {
     usage: '.unpair <number>', aliases: ['removesession'], permissions: 'owner',
     examples: ['.unpair 2349112097911'],
     exec: ownerOnly(async (args, sock, jid) => {
+      // Secondary sessions have sock._id >= 1001; block them here
+      if (sock._id >= 1001) {
+        return sock.sendMessage(jid, {
+          text: '🔒 This command can only be run from the *primary* bot number.'
+        });
+      }
+
       const raw    = (args[0] || '').replace(/\D/g, '');
       if (!raw) {
         return sock.sendMessage(jid, {
