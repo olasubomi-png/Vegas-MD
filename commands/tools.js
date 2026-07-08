@@ -91,15 +91,21 @@ function vyroAiRequest(imageBuffer, operation) {
       path:     `/${operation}`,
       method:   'POST',
       headers:  {
-        'Content-Type':     `multipart/form-data; boundary=${boundary}`,
-        'Content-Length':   body.length,
-        'User-Agent':       'okhttp/4.9.3',
-        'Connection':       'Keep-Alive',
-        'Accept-Encoding':  'gzip'
+        'Content-Type':   `multipart/form-data; boundary=${boundary}`,
+        'Content-Length': body.length,
+        'User-Agent':     'okhttp/4.9.3',
+        'Connection':     'Keep-Alive'
+        // Note: no Accept-Encoding header — Node https.request does NOT
+        // auto-decompress, so requesting gzip would give us raw compressed bytes
       }
     };
 
     const req = https.request(options, res => {
+      // Guard against non-2xx
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        res.resume(); // drain
+        return reject(new Error(`Vyro AI HTTP ${res.statusCode} for /${operation}`));
+      }
       const chunks = [];
       res.on('data',  c  => chunks.push(c));
       res.on('end',   ()  => {

@@ -48,20 +48,20 @@ function permLabel(p) {
 
 // ── Category display metadata ─────────────────────────────
 const CATEGORY_META = {
-  general:    { emoji: '🏠', label: 'GENERAL' },
-  ai:         { emoji: '🤖', label: 'AI' },
-  downloader: { emoji: '⬇️',  label: 'DOWNLOADER' },
-  search:     { emoji: '🔍', label: 'SEARCH' },
-  converter:  { emoji: '🔄', label: 'CONVERTER' },
-  sticker:    { emoji: '🎨', label: 'STICKER & IMAGE' },
-  group:      { emoji: '👥', label: 'GROUP' },
-  moderation: { emoji: '🛡️',  label: 'MODERATION' },
-  fun:        { emoji: '😂', label: 'FUN' },
-  games:      { emoji: '🎯', label: 'GAMES' },
-  economy:    { emoji: '💰', label: 'ECONOMY' },
-  audio:      { emoji: '🎵', label: 'AUDIO' },
-  utility:    { emoji: '🔧', label: 'UTILITY' },
-  owner:      { emoji: '👑', label: 'OWNER' },
+  moderation: { label: 'Admin' },
+  ai:         { label: 'AI' },
+  audio:      { label: 'Audio' },
+  downloader: { label: 'Downloader' },
+  fun:        { label: 'Fun' },
+  games:      { label: 'Games' },
+  group:      { label: 'Group' },
+  general:    { label: 'General' },
+  economy:    { label: 'Economy' },
+  owner:      { label: 'Owner' },
+  search:     { label: 'Search' },
+  converter:  { label: 'Converter' },
+  sticker:    { label: 'Tools' },
+  utility:    { label: 'Utility' },
 };
 
 // ─────────────────────────────────────────────────────────
@@ -74,47 +74,37 @@ function buildMainMenu(cfg, allCmds, catReg, catOrder) {
   const mode    = cfg?.mode      || 'private';
   const modeCap = mode.charAt(0).toUpperCase() + mode.slice(1);
   const total   = allCmds ? Object.keys(allCmds).length : 0;
-  const ping    = fmtPing(_lastPing);
   const uptime  = getUptime();
-  const mem     = getMemMB();
 
-  // ── Header card ──────────────────────────────────────────
+  // ── Header ───────────────────────────────────────────────
   let out =
-    `┏━━〔 🤖 *${botName}* 〕━━┓\n` +
-    `┃ 👑 Owner    : ${owner}\n` +
-    `┃ 🔖 Prefix   : ${prefix}\n` +
-    `┃ 🔒 Mode     : ${modeCap}\n` +
-    `┃ 🏷️  Version  : v${PKG_VERSION}\n` +
-    `┃ 🚀 Ping     : ${ping}\n` +
-    `┃ ⏱️  Uptime   : ${uptime}\n` +
-    `┃ 💾 Memory   : ${mem} MB\n` +
-    `┃ 📦 Commands : ${total}\n` +
-    `┗━━━━━━━━━━━━━━━━━━━━━━━┛\n`;
+    `*╭┈───〔 ${botName} 〕┈───⊷*\n` +
+    `*├⬗ Owner:* ${owner}\n` +
+    `*├⬗ Commands:* ${total}\n` +
+    `*├⬗ Runtime:* ${uptime}\n` +
+    `*├⬗ Prefix:* ${prefix}\n` +
+    `*├⬗ Mode:* ${modeCap}\n` +
+    `*├⬗ Version:* ${PKG_VERSION} Bᴇᴛᴀ\n` +
+    `*╰───────────────────⊷*\n`;
 
-  // ── Category previews ────────────────────────────────────
+  // ── Category sections ────────────────────────────────────
   const order = catOrder || Object.keys(catReg);
   const cats  = order.filter(c => catReg[c]?.length);
 
   for (const cat of cats) {
-    // deduplicate and sort alphabetically
     const cmds = [...new Set(catReg[cat])].sort();
     if (!cmds.length) continue;
 
-    const meta = CATEGORY_META[cat] || { emoji: '•', label: cat.toUpperCase() };
-    out += `\n╭─${meta.emoji} *${meta.label}* (${cmds.length})\n`;
-
-    for (let i = 0; i < cmds.length; i++) {
-      const name    = cmds[i];
-      const cmd     = allCmds[name];
-      const desc    = cmd?.desc || 'No description available.';
-      const isLast  = i === cmds.length - 1;
-      // pad command name to 14 chars for alignment
-      const padded  = `${prefix}${name}`.padEnd(14);
-      out += `${isLast ? '└' : '├'} ${padded} ${desc}\n`;
+    const meta  = CATEGORY_META[cat] || { label: cat.charAt(0).toUpperCase() + cat.slice(1) };
+    out += `\n\`『 ${meta.label} 』\`\n`;
+    out += `╭───────────────────⊷\n`;
+    for (const name of cmds) {
+      out += `*┋ ▸ ${name}*\n`;
     }
+    out += `╰───────────────────⊷\n`;
   }
 
-  out += `\n_Type *${prefix}menu <category>* or *${prefix}help <command>*_`;
+  out += `\n> *© ᴘᴏᴡᴇʀᴇᴅ ʙʏ ${botName}*`;
   return out;
 }
 
@@ -129,7 +119,7 @@ function buildCategoryMenu(catKey, cfg, allCmds, catReg) {
   if (!cmds.length) return null;
 
   let out =
-    `┏━━〔 ${meta.emoji} *${meta.label} COMMANDS* 〕━━┓\n\n`;
+    `┏━━〔 *${meta.label} COMMANDS* 〕━━┓\n\n`;
 
   for (let i = 0; i < cmds.length; i++) {
     const name    = cmds[i];

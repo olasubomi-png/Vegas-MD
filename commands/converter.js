@@ -299,8 +299,16 @@ const converterCommands = {
             signal: AbortSignal.timeout(15000)
           });
           if (!res.ok) continue;
+          // Reject non-audio responses (e.g. HTML error pages from rate-limited providers)
+          const ct = res.headers.get('content-type') || '';
+          if (!ct.includes('audio') && !ct.includes('mpeg') && !ct.includes('ogg') && !ct.includes('octet-stream')) continue;
           const buf = Buffer.from(await res.arrayBuffer());
-          if (buf.length > 1000) { audioBuf = buf; break; }
+          // Basic audio signature check: MP3 starts with ID3 or 0xFF 0xFB/0xFA/0xF3
+          const isAudio = buf.length > 1000 && (
+            buf[0] === 0x49 && buf[1] === 0x44 && buf[2] === 0x33 // ID3
+            || (buf[0] === 0xFF && (buf[1] & 0xE0) === 0xE0)       // MPEG sync word
+          );
+          if (isAudio) { audioBuf = buf; break; }
         } catch (_) {}
       }
 
