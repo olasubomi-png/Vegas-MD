@@ -2,6 +2,7 @@
 // commands/moderation.js — Warn, ban, welcome/goodbye configuration
 const db = require('../lib/database');
 const { getMentionedJid, isGroupAdmin, resolveIsOwner } = require('../lib/helpers');
+// resolveIsOwner is used in both requireAdmin (via botConfig) and the del command
 
 async function requireAdmin(sock, jid, isGroup, sender, message, botConfig) {
   if (!isGroup) { await sock.sendMessage(jid, { text: '❌ This command only works in groups.' }); return false; }
@@ -101,6 +102,63 @@ const moderationCommands = {
       if (!msg) return sock.sendMessage(jid, { text: '❌ Usage: .setgoodbye <message>\nVariables: @user' });
       db.updateGroup(jid, { goodbyeMsg: msg });
       await sock.sendMessage(jid, { text: `✅ Goodbye message updated:\n\n_${msg}_` });
+    }
+  },
+
+  // ── Delete (unsend) a quoted message ──────────────────
+  del: {
+    category: 'moderation',
+    desc: 'Delete a quoted message (reply to any message and use this command)',
+    usage: '.del', aliases: ['delete', 'unsend'], permissions: 'admin',
+    examples: ['.del  ← reply to the message you want to delete'],
+    exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
+      // Allow group admins OR owner; non-group: owner only
+      if (isGroup) {
+        if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
+      } else {
+        if (!resolveIsOwner(message, sender, botConfig)) {
+          return sock.sendMessage(jid, { text: '❌ Only the owner can delete messages in DMs.' });
+        }
+      }
+
+      // Must be a reply — contextInfo can live inside several message wrappers
+      const inner =
+        message.message?.extendedTextMessage ||
+        message.message?.imageMessage ||
+        message.message?.videoMessage ||
+        message.message?.audioMessage ||
+        message.message?.documentMessage ||
+        message.message?.stickerMessage ||
+        null;
+      const ctx         = inner?.contextInfo;
+      const stanzaId    = ctx?.stanzaId;
+      const participant = ctx?.participant;
+
+      if (!stanzaId) {
+        return sock.sendMessage(jid, { text: '❌ Reply to the message you want to delete, then type .del' });
+      }
+
+      // Normalize JIDs for comparison (strip device suffix "@s.whatsapp.net:N" and leading "+")
+      const stripJid = id => (id || '').replace(/^\+/, '').replace(/[:@].*/g, '');
+      const botNum   = stripJid(sock.user?.id);
+      const quotedBy = stripJid(participant);
+      const fromMe   = Boolean(botNum && quotedBy && botNum === quotedBy);
+
+      // Build the key of the message to delete
+      const deleteKey = {
+        remoteJid:  jid,
+        id:         stanzaId,
+        fromMe,
+        ...(isGroup && participant ? { participant } : {})
+      };
+
+      try {
+        await sock.sendMessage(jid, { delete: deleteKey });
+      } catch (err) {
+        await sock.sendMessage(jid, {
+          text: `❌ Could not delete: ${err.message}\n\n_Make sure the bot is an admin with delete-message permission._`
+        });
+      }
     }
   }
 };

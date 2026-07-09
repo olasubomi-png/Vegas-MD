@@ -270,6 +270,44 @@ const searchCommands = {
     }
   },
 
+  // ── Random dog image (dog.ceo — free, no key) ───────────
+  dog: {
+    category: 'search', desc: 'Fetch a random dog photo',
+    usage: '.dog', aliases: ['doggo', 'woof'], permissions: 'all',
+    examples: ['.dog'],
+    exec: async (args, sock, jid) => {
+      try {
+        const { data } = await axios.get('https://dog.ceo/api/breeds/image/random', { timeout: 10000 });
+        if (!data?.message) throw new Error('No image returned');
+        await sock.sendMessage(jid, {
+          image:   { url: data.message },
+          caption: '🐶 *Random Dog*\n\n_Powered by dog.ceo_'
+        });
+      } catch (err) {
+        await sock.sendMessage(jid, { text: `❌ Could not fetch dog image: ${err.message}` });
+      }
+    }
+  },
+
+  // ── Random fox image (randomfox.ca — free, no key) ───────
+  fox: {
+    category: 'search', desc: 'Fetch a random fox photo',
+    usage: '.fox', aliases: ['foxy'], permissions: 'all',
+    examples: ['.fox'],
+    exec: async (args, sock, jid) => {
+      try {
+        const { data } = await axios.get('https://randomfox.ca/floof/', { timeout: 10000 });
+        if (!data?.image) throw new Error('No image returned');
+        await sock.sendMessage(jid, {
+          image:   { url: data.image },
+          caption: '🦊 *Random Fox*\n\n_Powered by randomfox.ca_'
+        });
+      } catch (err) {
+        await sock.sendMessage(jid, { text: `❌ Could not fetch fox image: ${err.message}` });
+      }
+    }
+  },
+
   // ── Pinterest (redirect — no usable API without auth) ─
   pinterest: {
     category: 'search', desc: 'Search Pinterest for images',

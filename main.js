@@ -1058,7 +1058,7 @@ console.log('🚀 Starting OLASUBOMI-MD...');
   // ── Expose handleCommand globally so sessionManager can route secondary sessions ──
   global._smHandleCommand = handleCommand;
 
-  // ── Start primary session ──────────────────────────────────────────────────
+  // ── Start primary WhatsApp session ────────────────────────────────────────
   connect().catch(err => console.error('[startup] Fatal:', err.message));
 
   // ── Resume any previously saved secondary sessions ─────────────────────────
@@ -1066,4 +1066,17 @@ console.log('🚀 Starting OLASUBOMI-MD...');
   sessionManager.loadSavedSessions().catch(err =>
     console.error('[startup] sessionManager.loadSavedSessions error:', err.message)
   );
+
+  // ── Start Telegram bot if token is configured ──────────────────────────────
+  if (process.env.TELEGRAM_BOT_TOKEN) {
+    try {
+      const { start: startTelegram } = require('./telegram');
+      startTelegram();
+      console.log('[startup] Telegram bot started.');
+    } catch (err) {
+      console.error('[startup] Telegram bot failed to start:', err.message);
+    }
+  } else {
+    console.log('[startup] TELEGRAM_BOT_TOKEN not set — Telegram bot skipped.');
+  }
 })();

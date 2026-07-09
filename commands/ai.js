@@ -152,19 +152,22 @@ const aiCommands = {
     }
   },
   imagine: {
-    category: 'ai', desc: 'Generate an AI image from a description',
-    usage: '.imagine <description>', aliases: [], permissions: 'all',
-    examples: ['.imagine a futuristic city at night', '.imagine cute cat wearing sunglasses'],
+    category: 'ai', desc: 'Generate a realistic AI image from a description',
+    usage: '.imagine <description>', aliases: ['imagine'], permissions: 'all',
+    examples: ['.imagine a futuristic city at night', '.imagine woman standing in a forest, photorealistic'],
     exec: async (args, sock, jid) => {
       const prompt = args.join(' ').trim();
       if (!prompt) return sock.sendMessage(jid, { text: '❌ Usage: .imagine <description>' });
-      await sock.sendMessage(jid, { text: `🎨 *Imagine AI* generating image...\n\n_"${prompt}"_` });
+      await sock.sendMessage(jid, { text: `📸 *Imagine AI* generating realistic image...\n\n_"${prompt}"_` });
       try {
-        const encoded = encodeURIComponent(prompt);
-        const imgUrl  = `https://image.pollinations.ai/prompt/${encoded}?model=flux&width=1024&height=1024&nologo=true&seed=${Math.floor(Math.random() * 999999)}`;
+        // flux-realism model produces photorealistic images instead of animated/artistic ones.
+        // enhance=true lets pollinations boost the prompt for better realism.
+        const encoded  = encodeURIComponent(prompt);
+        const seed     = Math.floor(Math.random() * 999999);
+        const imgUrl   = `https://image.pollinations.ai/prompt/${encoded}?model=flux-realism&width=1024&height=1024&nologo=true&enhance=true&seed=${seed}`;
         await sock.sendMessage(jid, {
           image:   { url: imgUrl },
-          caption: `🎨 *Imagine AI*\n\n_"${prompt}"_`
+          caption: `📸 *Imagine AI* (Realistic)\n\n_"${prompt}"_`
         });
       } catch (err) {
         await sock.sendMessage(jid, { text: `❌ Image generation failed: ${err.message}` });
