@@ -15,6 +15,14 @@ if (!TOKEN) {
 
 const API = `https://api.telegram.org/bot${TOKEN}`;
 
+// ─── Channel promotion constants ───────────────────────────────────────────
+
+const CHANNEL_LINK = 'https://whatsapp.com/channel/0029Vb8phn8KAwEemfEwDb2Z';
+
+// Per-user state (in-memory; resets on restart — acceptable for promotions)
+const seenHelp      = new Set();   // chatIds that have seen the channel link in /help
+const lastPromoTime = new Map();   // chatId → timestamp of last 24h reminder
+
 // ─── Telegram API helpers ──────────────────────────────────────────────────
 
 async function apiCall(method, body = {}) {
@@ -30,11 +38,41 @@ async function apiCall(method, body = {}) {
 
 async function sendText(chatId, text, options = {}) {
   return apiCall('sendMessage', {
-    chat_id:    chatId,
-    text:       text.slice(0, 4096), // Telegram message limit
-    parse_mode: 'Markdown',
+    chat_id:                  chatId,
+    text:                     text.slice(0, 4096),
+    parse_mode:               'Markdown',
+    disable_web_page_preview: true,
     ...options
   });
+}
+
+/**
+ * Upload a raw image buffer to Telegram.
+ * Uses form-data (usually available as a transitive dep of axios).
+ * Falls back to passing the URL string if form-data is unavailable.
+ */
+async function sendPhotoBuffer(chatId, imgBuffer, caption = '') {
+  let FormData;
+  try { FormData = require('form-data'); } catch { FormData = null; }
+
+  if (FormData) {
+    const form = new FormData();
+    form.append('chat_id',    String(chatId));
+    form.append('caption',    caption.slice(0, 1024));
+    form.append('parse_mode', 'Markdown');
+    form.append('photo', imgBuffer, { filename: 'image.jpg', contentType: 'image/jpeg' });
+    try {
+      const { data } = await axios.post(`${API}/sendPhoto`, form, {
+        headers: form.getHeaders(),
+        timeout: 30000
+      });
+      return data;
+    } catch (err) {
+      console.error('[Telegram] sendPhotoBuffer failed:', err.message);
+      return null;
+    }
+  }
+  return null;
 }
 
 async function sendPhoto(chatId, photoUrl, caption = '') {
@@ -54,7 +92,47 @@ async function sendUploadPhoto(chatId) {
   return apiCall('sendChatAction', { chat_id: chatId, action: 'upload_photo' });
 }
 
-// ─── Command implementations ───────────────────────────────────────────────
+// ─── Channel promotion helper ──────────────────────────────────────────────
+
+/**
+ * sendChannelPromotion(chatId)
+ * Send the official WhatsApp channel follow reminder.
+ * Used by /start, first /help, and the 24-hour per-user reminder.
+ */
+async function sendChannelPromotion(chatId) {
+  await sendText(chatId,
+    `📢 *Stay updated:*\n` +
+    `Follow OLASUBOMI-MD on WhatsApp:\n` +
+    `${CHANNEL_LINK}`
+  );
+}
+
+// ─── Image mode detection ──────────────────────────────────────────────────
+// Returns 'anime' or 'realistic' based on keywords in the prompt.
+
+const ANIME_KEYWORDS = [
+  'anime', 'manga', 'chibi', 'kawaii', 'waifu', 'otaku', 'sakura',
+  // character names
+  'naruto', 'goku', 'luffy', 'sasuke', 'ichigo', 'levi', 'eren', 'mikasa',
+  'gojo', 'itadori', 'tanjiro', 'zenitsu', 'inosuke', 'killua', 'gon',
+  'nezuko', 'todoroki', 'deku', 'bakugo', 'zoro', 'nami', 'usopp',
+  // series / genre names
+  'dragon ball', 'one piece', 'attack on titan', 'demon slayer',
+  'jujutsu kaisen', 'my hero academia', 'sword art online', 'fairy tail',
+  'bleach', 'fullmetal alchemist', 'death note', 'hunter x hunter',
+  'chainsaw man', 'spy x family', 'vinland saga', 'overlord', 're:zero',
+  // art style descriptors
+  'cartoon', 'animated', 'illustration', 'drawing', 'sketch', 'toon',
+  '2d art', 'pixel art', 'cel-shaded', 'comic', 'watercolor',
+  'oil painting', 'painterly', 'stylized', 'digital art'
+];
+
+function detectImageMode(prompt) {
+  const lower = prompt.toLowerCase();
+  return ANIME_KEYWORDS.some(kw => lower.includes(kw)) ? 'anime' : 'realistic';
+}
+
+// ─── Static data ───────────────────────────────────────────────────────────
 
 const jokes = [
   '😂 Why did the bot go to therapy? It had too many unresolved promises!',
@@ -89,19 +167,42 @@ const eightBall = [
 function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 
 // ─── Command table ─────────────────────────────────────────────────────────
-// Each handler receives (chatId, args, msg) and should send reply(ies).
 
 const commands = {
 
+  // ── /start ─────────────────────────────────────────────
   start: async (chatId) => {
+    // Mark promo as sent so the next command doesn't immediately fire another reminder
+    markPromoSent(chatId);
     await sendText(chatId,
-      `🤖 *OLASUBOMI-MD — Telegram Edition*\n\n` +
-      `Welcome! Use /help to see available commands.\n\n` +
-      `_Powered by the same engine as the WhatsApp bot._`
+      `🚀 *Welcome to OLASUBOMI-MD!*\n\n` +
+      `Before using the bot, please follow our official WhatsApp Channel for updates, new features, and announcements.\n\n` +
+      `📢 *OLASUBOMI-MD Channel:*\n` +
+      `${CHANNEL_LINK}\n\n` +
+      `After joining, you can use:\n` +
+      `/help\n` +
+      `/ping\n` +
+      `/imagine\n` +
+      `/dog\n` +
+      `/fox\n` +
+      `/google\n` +
+      `and many more commands.`
     );
   },
 
+  // ── /help ──────────────────────────────────────────────
   help: async (chatId) => {
+    const isFirstTime = !seenHelp.has(chatId);
+    if (isFirstTime) {
+      seenHelp.add(chatId);
+      // Channel link is already in the footer — mark promo sent to avoid duplicate reminder
+      markPromoSent(chatId);
+    }
+
+    const channelFooter = isFirstTime
+      ? `\n\n📢 *Stay updated — follow us on WhatsApp:*\n${CHANNEL_LINK}`
+      : '';
+
     await sendText(chatId,
       `📋 *Available Commands*\n\n` +
       `*🎉 Fun*\n` +
@@ -118,14 +219,16 @@ const commands = {
       `/github <user/repo or query> — GitHub search\n` +
       `/npm <package> — npm package info\n\n` +
       `*🎨 AI*\n` +
-      `/imagine <description> — Generate realistic image\n` +
+      `/imagine <description> — Generate image (auto anime or realistic)\n` +
       `/translate <lang> | <text> — Translate text\n\n` +
       `*🛠 Utility*\n` +
       `/ping — Check bot latency\n` +
-      `/help — Show this menu`
+      `/help — Show this menu` +
+      channelFooter
     );
   },
 
+  // ── /ping ──────────────────────────────────────────────
   ping: async (chatId) => {
     const start = Date.now();
     const sent  = await sendText(chatId, '🏓 Pong!');
@@ -139,20 +242,24 @@ const commands = {
     }
   },
 
+  // ── /joke ──────────────────────────────────────────────
   joke: async (chatId) => {
     await sendText(chatId, pick(jokes));
   },
 
+  // ── /quote ─────────────────────────────────────────────
   quote: async (chatId) => {
     await sendText(chatId, pick(quotes));
   },
 
+  // ── /8ball ─────────────────────────────────────────────
   '8ball': async (chatId, args) => {
     const q = args.join(' ').trim();
     if (!q) return sendText(chatId, '❌ Usage: /8ball <your question>');
     await sendText(chatId, `🎱 *Magic 8-Ball*\n\n❓ _${q}_\n\n${pick(eightBall)}`);
   },
 
+  // ── /dog ───────────────────────────────────────────────
   dog: async (chatId) => {
     await sendUploadPhoto(chatId);
     try {
@@ -164,6 +271,7 @@ const commands = {
     }
   },
 
+  // ── /fox ───────────────────────────────────────────────
   fox: async (chatId) => {
     await sendUploadPhoto(chatId);
     try {
@@ -175,21 +283,52 @@ const commands = {
     }
   },
 
+  // ── /imagine ───────────────────────────────────────────
+  // Auto-detects whether the prompt is anime/artistic or photorealistic.
+  // Downloads the image as a buffer first to avoid Telegram's short fetch timeout.
   imagine: async (chatId, args) => {
     const prompt = args.join(' ').trim();
     if (!prompt) return sendText(chatId, '❌ Usage: /imagine <description>');
-    await sendText(chatId, `📸 Generating realistic image...\n\n_"${prompt}"_`);
+
+    const mode       = detectImageMode(prompt);
+    const isAnime    = mode === 'anime';
+    const modeLabel  = isAnime ? '🎌 Anime' : '📸 Realistic';
+    const model      = isAnime ? 'flux' : 'flux-realism';
+    const extraParam = isAnime ? '' : '&enhance=true';
+
+    await sendText(chatId, `${modeLabel} *Imagine AI* generating...\n\n_"${prompt}"_`);
     await sendUploadPhoto(chatId);
+
     try {
       const encoded = encodeURIComponent(prompt);
       const seed    = Math.floor(Math.random() * 999999);
-      const imgUrl  = `https://image.pollinations.ai/prompt/${encoded}?model=flux-realism&width=1024&height=1024&nologo=true&enhance=true&seed=${seed}`;
-      await sendPhoto(chatId, imgUrl, `📸 *Imagine AI* (Realistic)\n\n_"${prompt}"_`);
+      const imgUrl  = `https://image.pollinations.ai/prompt/${encoded}?model=${model}&width=1024&height=1024&nologo=true${extraParam}&seed=${seed}`;
+
+      // Download image as buffer (pollinations generates on demand, can take 20-60s)
+      const { data: imgData } = await axios.get(imgUrl, {
+        responseType: 'arraybuffer',
+        timeout:      90000
+      });
+      const imgBuffer = Buffer.from(imgData);
+
+      const caption  = `${modeLabel} *Imagine AI*\n\n_"${prompt}"_`;
+      let delivered  = await sendPhotoBuffer(chatId, imgBuffer, caption);
+
+      // Fallback: if form-data wasn't available, try URL approach
+      if (!delivered) {
+        delivered = await sendPhoto(chatId, imgUrl, caption);
+      }
+
+      // Both paths failed — tell the user explicitly instead of silently dropping
+      if (!delivered) {
+        await sendText(chatId, `❌ Image was generated but could not be delivered. Try again in a moment.`);
+      }
     } catch (err) {
       await sendText(chatId, `❌ Image generation failed: ${err.message}`);
     }
   },
 
+  // ── /google ────────────────────────────────────────────
   google: async (chatId, args) => {
     const q = args.join(' ').trim();
     if (!q) return sendText(chatId, '❌ Usage: /google <query>');
@@ -215,6 +354,7 @@ const commands = {
     }
   },
 
+  // ── /weather ───────────────────────────────────────────
   weather: async (chatId, args) => {
     const city = args.join(' ').trim();
     if (!city) return sendText(chatId, '❌ Usage: /weather <city>');
@@ -253,6 +393,7 @@ const commands = {
     }
   },
 
+  // ── /movie ─────────────────────────────────────────────
   movie: async (chatId, args) => {
     const title = args.join(' ').trim();
     if (!title) return sendText(chatId, '❌ Usage: /movie <title>');
@@ -276,6 +417,7 @@ const commands = {
     }
   },
 
+  // ── /lyrics ────────────────────────────────────────────
   lyrics: async (chatId, args) => {
     const input = args.join(' ').trim();
     if (!input) return sendText(chatId, '❌ Usage: /lyrics <artist> - <song>');
@@ -294,7 +436,9 @@ const commands = {
         const res = await axios.get(`https://api.lyrics.ovh/v1/${encA}/${encT}`, { timeout: 15000 });
         data = res.data;
       } catch { /* fallthrough */ }
-      if (!data?.lyrics) return sendText(chatId, `❌ Lyrics not found for *${input}*.\n\nTry: https://genius.com/search?q=${encodeURIComponent(input)}`);
+      if (!data?.lyrics) return sendText(chatId,
+        `❌ Lyrics not found for *${input}*.\n\nTry: https://genius.com/search?q=${encodeURIComponent(input)}`
+      );
       const snippet   = data.lyrics.slice(0, 3500);
       const truncated = data.lyrics.length > 3500;
       await sendText(chatId, `🎵 *Lyrics*\n\n${snippet}${truncated ? '\n\n_... (truncated)_' : ''}`);
@@ -303,6 +447,7 @@ const commands = {
     }
   },
 
+  // ── /github ────────────────────────────────────────────
   github: async (chatId, args) => {
     const q = args.join(' ').trim();
     if (!q) return sendText(chatId, '❌ Usage: /github <user/repo or query>');
@@ -333,6 +478,7 @@ const commands = {
     }
   },
 
+  // ── /npm ───────────────────────────────────────────────
   npm: async (chatId, args) => {
     const q = args.join(' ').trim();
     if (!q) return sendText(chatId, '❌ Usage: /npm <package>');
@@ -354,6 +500,7 @@ const commands = {
     }
   },
 
+  // ── /translate ─────────────────────────────────────────
   translate: async (chatId, args) => {
     const input = args.join(' ').trim();
     if (!input || !input.includes('|')) {
@@ -365,7 +512,6 @@ const commands = {
     if (!text) return sendText(chatId, '❌ No text provided after the |');
     await sendTyping(chatId);
     try {
-      // Use pollinations text API for translation (same as WhatsApp bot)
       const prompt  = `Translate this to ${lang}, reply with only the translation: "${text}"`;
       const encoded = encodeURIComponent(prompt);
       const res     = await axios.get(
@@ -380,6 +526,19 @@ const commands = {
   }
 };
 
+// ─── 24-hour promotion reminder ────────────────────────────────────────────
+
+const PROMO_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+function shouldSendPromo(chatId) {
+  const last = lastPromoTime.get(chatId);
+  return !last || (Date.now() - last) >= PROMO_INTERVAL_MS;
+}
+
+function markPromoSent(chatId) {
+  lastPromoTime.set(chatId, Date.now());
+}
+
 // ─── Update handler ────────────────────────────────────────────────────────
 
 async function handleUpdate(update) {
@@ -392,13 +551,12 @@ async function handleUpdate(update) {
   if (!text.startsWith('/')) return; // ignore non-commands
 
   // Parse "/command@BotName args…" format
-  const withoutSlash = text.slice(1);
+  const withoutSlash  = text.slice(1);
   const [rawCmd, ...args] = withoutSlash.split(/\s+/);
-  const command = rawCmd.split('@')[0].toLowerCase(); // strip @BotUsername suffix
+  const command = rawCmd.split('@')[0].toLowerCase();
 
   const handler = commands[command];
   if (!handler) {
-    // Only reply in private chats to avoid spam in groups
     if (msg.chat.type === 'private') {
       await sendText(chatId, `❓ Unknown command: /${command}\n\nUse /help to see available commands.`);
     }
@@ -410,6 +568,13 @@ async function handleUpdate(update) {
   } catch (err) {
     console.error(`[Telegram] /${command} error:`, err.message);
     await sendText(chatId, `❌ An error occurred: ${err.message}`);
+  }
+
+  // 24-hour channel promotion — fire after any command except /start (which already shows it)
+  if (command !== 'start' && shouldSendPromo(chatId)) {
+    markPromoSent(chatId);
+    // Small delay so it appears after the command response
+    setTimeout(() => sendChannelPromotion(chatId).catch(() => {}), 1500);
   }
 }
 
@@ -427,8 +592,6 @@ async function poll(offset = 0) {
 
     for (const update of updates) {
       offset = update.update_id + 1;
-      // Await each handler so updates are processed in order and failures are caught
-      // before the next offset advance. This avoids unbounded concurrent handlers.
       await handleUpdate(update).catch(err =>
         console.error('[Telegram] handleUpdate error:', err.message)
       );
@@ -436,11 +599,9 @@ async function poll(offset = 0) {
   } catch (err) {
     const msg = err.response?.data?.description || err.message;
     console.error('[Telegram] polling error:', msg);
-    // Back off for 5 s on error
     await new Promise(r => setTimeout(r, 5000));
   }
 
-  // Schedule next poll immediately (async recursion avoids stack growth)
   setImmediate(() => poll(offset));
 }
 
@@ -451,7 +612,6 @@ function start() {
     console.warn('[Telegram] TELEGRAM_BOT_TOKEN not set — skipping Telegram bot.');
     return;
   }
-  // Remove any existing webhook so polling works
   apiCall('deleteWebhook', { drop_pending_updates: false })
     .then(() => {
       console.log('[Telegram] Webhook cleared. Starting long-poll...');
@@ -459,11 +619,11 @@ function start() {
     })
     .catch(err => {
       console.error('[Telegram] Could not clear webhook:', err.message);
-      poll(0); // start anyway
+      poll(0);
     });
 }
 
-module.exports = { start };
+module.exports = { start, sendChannelPromotion, detectImageMode };
 
 // Allow running directly: node telegram.js
 if (require.main === module) {

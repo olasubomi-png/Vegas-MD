@@ -152,22 +152,52 @@ const aiCommands = {
     }
   },
   imagine: {
-    category: 'ai', desc: 'Generate a realistic AI image from a description',
-    usage: '.imagine <description>', aliases: ['imagine'], permissions: 'all',
-    examples: ['.imagine a futuristic city at night', '.imagine woman standing in a forest, photorealistic'],
+    category: 'ai', desc: 'Generate an AI image — auto-detects anime vs photorealistic style',
+    usage: '.imagine <description>', aliases: [], permissions: 'all',
+    examples: [
+      '.imagine a futuristic city at night',
+      '.imagine naruto in hokage robes',
+      '.imagine ronaldo lifting the world cup trophy'
+    ],
     exec: async (args, sock, jid) => {
       const prompt = args.join(' ').trim();
       if (!prompt) return sock.sendMessage(jid, { text: '❌ Usage: .imagine <description>' });
-      await sock.sendMessage(jid, { text: `📸 *Imagine AI* generating realistic image...\n\n_"${prompt}"_` });
+
+      // ── Detect whether the prompt calls for anime or photorealistic output ──
+      const ANIME_KEYWORDS = [
+        'anime', 'manga', 'chibi', 'kawaii', 'waifu', 'otaku', 'sakura',
+        'naruto', 'goku', 'luffy', 'sasuke', 'ichigo', 'levi', 'eren', 'mikasa',
+        'gojo', 'itadori', 'tanjiro', 'zenitsu', 'inosuke', 'killua', 'gon',
+        'nezuko', 'todoroki', 'deku', 'bakugo', 'zoro', 'nami',
+        'dragon ball', 'one piece', 'attack on titan', 'demon slayer',
+        'jujutsu kaisen', 'my hero academia', 'sword art online', 'fairy tail',
+        'bleach', 'fullmetal alchemist', 'death note', 'hunter x hunter',
+        'chainsaw man', 'spy x family', 'vinland saga', 'overlord', 're:zero',
+        'cartoon', 'animated', 'illustration', 'drawing', 'sketch', 'toon',
+        '2d art', 'pixel art', 'cel-shaded', 'comic', 'watercolor',
+        'oil painting', 'painterly', 'stylized', 'digital art'
+      ];
+      const isAnime    = ANIME_KEYWORDS.some(kw => prompt.toLowerCase().includes(kw));
+      const modeLabel  = isAnime ? '🎌 Anime' : '📸 Realistic';
+      const model      = isAnime ? 'flux' : 'flux-realism';
+      const extraParam = isAnime ? '' : '&enhance=true';
+
+      await sock.sendMessage(jid, { text: `${modeLabel} *Imagine AI* generating...\n\n_"${prompt}"_` });
       try {
-        // flux-realism model produces photorealistic images instead of animated/artistic ones.
-        // enhance=true lets pollinations boost the prompt for better realism.
-        const encoded  = encodeURIComponent(prompt);
-        const seed     = Math.floor(Math.random() * 999999);
-        const imgUrl   = `https://image.pollinations.ai/prompt/${encoded}?model=flux-realism&width=1024&height=1024&nologo=true&enhance=true&seed=${seed}`;
+        const encoded = encodeURIComponent(prompt);
+        const seed    = Math.floor(Math.random() * 999999);
+        const imgUrl  = `https://image.pollinations.ai/prompt/${encoded}?model=${model}&width=1024&height=1024&nologo=true${extraParam}&seed=${seed}`;
+
+        // Download as buffer first — avoids Baileys "Failed to fetch stream" errors
+        // that occur when the remote URL takes too long to respond.
+        const { data: imgData } = await axios.get(imgUrl, {
+          responseType: 'arraybuffer',
+          timeout:      90000   // pollinations can take up to ~60 s on first generation
+        });
+
         await sock.sendMessage(jid, {
-          image:   { url: imgUrl },
-          caption: `📸 *Imagine AI* (Realistic)\n\n_"${prompt}"_`
+          image:   Buffer.from(imgData),
+          caption: `${modeLabel} *Imagine AI*\n\n_"${prompt}"_`
         });
       } catch (err) {
         await sock.sendMessage(jid, { text: `❌ Image generation failed: ${err.message}` });
