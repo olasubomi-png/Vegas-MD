@@ -4,7 +4,9 @@ const axios = require('axios');
 
 async function askOpenAI(query, model = 'gpt-3.5-turbo') {
   const { OpenAI } = require('openai');
-  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  // Accept both OPENAI_API_KEY and the common typo OPEN_API_KEY
+  const apiKey = process.env.OPENAI_API_KEY || process.env.OPEN_API_KEY;
+  const client = new OpenAI({ apiKey });
   const res = await client.chat.completions.create({
     model,
     messages: [{ role: 'user', content: query }],
@@ -53,7 +55,7 @@ async function handleAI(args, sock, jid, opts = {}) {
   try {
     let answer;
     if (provider === 'openai') {
-      if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY not set');
+      if (!process.env.OPENAI_API_KEY && !process.env.OPEN_API_KEY) throw new Error('OPENAI_API_KEY not set');
       answer = await askOpenAI(query, model);
     } else if (provider === 'claude') {
       if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not set');
@@ -64,7 +66,7 @@ async function handleAI(args, sock, jid, opts = {}) {
     } else if (provider === 'deepseek') {
       answer = await askPollinations(query, 'deepseek');
     } else {
-      answer = process.env.OPENAI_API_KEY
+      answer = (process.env.OPENAI_API_KEY || process.env.OPEN_API_KEY)
         ? await askOpenAI(query)
         : await askPollinations(query, 'openai');
     }
@@ -74,7 +76,7 @@ async function handleAI(args, sock, jid, opts = {}) {
     });
   } catch (err) {
     const keyHint = err.message.includes('not set')
-      ? `\n\n💡 Set the API key as a Replit Secret to use real ${label}.`
+      ? `\n\n💡 Add OPENAI_API_KEY=your_key to your .env file to use real ${label}.`
       : '';
     try {
       const fallback = await askPollinations(query, 'openai');
@@ -192,7 +194,11 @@ const aiCommands = {
         // that occur when the remote URL takes too long to respond.
         const { data: imgData } = await axios.get(imgUrl, {
           responseType: 'arraybuffer',
-          timeout:      90000   // pollinations can take up to ~60 s on first generation
+          timeout:      90000,   // pollinations can take up to ~60 s on first generation
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (compatible; OLASUBOMI-MD/3.0)',
+            'Referer':    'https://pollinations.ai/'
+          }
         });
 
         await sock.sendMessage(jid, {
@@ -213,10 +219,18 @@ const aiCommands = {
       if (!prompt) return sock.sendMessage(jid, { text: '❌ Usage: .flux <image description>' });
       await sock.sendMessage(jid, { text: `🖼️ *Flux AI* generating...\n\n_"${prompt}"_` });
       try {
-        const encoded = encodeURIComponent(prompt);
-        const imgUrl  = `https://image.pollinations.ai/prompt/${encoded}?model=flux&width=768&height=768&nologo=true`;
+        const encoded  = encodeURIComponent(prompt);
+        const imgUrl   = `https://image.pollinations.ai/prompt/${encoded}?model=flux&width=768&height=768&nologo=true`;
+        const { data: imgData } = await axios.get(imgUrl, {
+          responseType: 'arraybuffer',
+          timeout:      90000,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (compatible; OLASUBOMI-MD/3.0)',
+            'Referer':    'https://pollinations.ai/'
+          }
+        });
         await sock.sendMessage(jid, {
-          image:   { url: imgUrl },
+          image:   Buffer.from(imgData),
           caption: `🖼️ *Flux AI*\n\n_"${prompt}"_`
         });
       } catch (err) {
