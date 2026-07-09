@@ -7,17 +7,42 @@ const axios = require('axios');
 const BASE   = 'https://zstlab.cyou';
 const APIKEY = process.env.ZST_API_KEY || '';
 
-// Warn at load time if API key is missing so debugging is obvious
+// Fail loudly at load time if the API key is missing.
+// Resolution: add ZST_API_KEY to Replit Secrets (Secrets tab → ZST_API_KEY → your key from https://zstlab.cyou).
 if (!APIKEY) {
-  console.warn('[zstlab] WARNING: ZST_API_KEY is not set. All ZST Labs commands will return 401 errors. Set it in Replit Secrets as ZST_API_KEY.');
+  console.error(
+    '[zstlab] FATAL: ZST_API_KEY environment variable is not set.\n' +
+    '         All ZST Labs commands will return 401 Unauthorized.\n' +
+    '         Fix: add ZST_API_KEY to Replit Secrets with your key from https://zstlab.cyou'
+  );
 }
 
-// Shared axios instance with auth header
+// Shared axios instance — every request carries x-api-key for authentication.
+// The header is set from ZST_API_KEY at startup; restart the bot after updating the secret.
 const api = axios.create({
   baseURL: BASE,
   timeout: 20000,
-  headers: { 'x-api-key': APIKEY, 'User-Agent': 'OLASUBOMI-MD/3.0.0' }
+  headers: {
+    'x-api-key':  APIKEY,
+    'User-Agent': 'OLASUBOMI-MD/3.0.0'
+  }
 });
+
+// Intercept 401/403 responses and replace them with a clear, actionable error.
+// Without this, users see a raw "Unauthorized" message with no guidance on how to fix it.
+api.interceptors.response.use(
+  response => response,
+  error => {
+    const status = error.response?.status;
+    if (status === 401 || status === 403) {
+      const msg = APIKEY
+        ? `ZST Labs API key rejected (HTTP ${status}). Check that your ZST_API_KEY is correct at https://zstlab.cyou`
+        : `ZST Labs API key is not set. Add ZST_API_KEY to Replit Secrets (get a free key at https://zstlab.cyou)`;
+      return Promise.reject(new Error(msg));
+    }
+    return Promise.reject(error);
+  }
+);
 
 // Helper: GET with params
 async function zget(path, params = {}) {
@@ -31,9 +56,9 @@ async function zpost(path, body = {}) {
   return data;
 }
 
-// Helper: send error
+// Helper: send error — surfaces the interceptor's message or the raw API error
 function errMsg(sock, jid, err) {
-  const msg = err?.response?.data?.error || err?.response?.data?.message || err.message || 'Unknown error';
+  const msg = err?.message || err?.response?.data?.error || err?.response?.data?.message || 'Unknown error';
   return sock.sendMessage(jid, { text: `❌ ${msg}` });
 }
 

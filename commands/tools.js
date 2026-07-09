@@ -123,6 +123,60 @@ function vyroAiRequest(imageBuffer, operation) {
   });
 }
 
+// ── Fallback: local ffmpeg enhancement ─────────────────────────────────────
+// Applied when all external AI APIs fail. Uses unsharp mask + upscale.
+async function enhanceLocal(imageBuffer, operation) {
+  const inFile  = tmpFile('.jpg');
+  const outFile = tmpFile('.jpg');
+  fs.writeFileSync(inFile, imageBuffer);
+  try {
+    let vf;
+    if (operation === 'dehaze') {
+      // Increase contrast + brightness to simulate dehaze
+      vf = 'eq=contrast=1.4:brightness=0.05:saturation=1.2,unsharp=5:5:0.8:3:3:0';
+    } else if (operation === 'recolor') {
+      // Boost saturation strongly to simulate colorization
+      // Note: unsharp chroma sizes must be odd positive numbers (not 0)
+      vf = 'eq=saturation=2.5:contrast=1.1,unsharp=3:3:0.5:3:3:0';
+    } else {
+      // enhance — scale up 2× + unsharp mask for sharpening
+      vf = 'scale=iw*2:ih*2:flags=lanczos,unsharp=5:5:1.2:5:5:0';
+    }
+    await ffmpegRun(inFile, outFile, ['-vf', vf, '-q:v', '2']);
+    const result = fs.readFileSync(outFile);
+    if (result.length < 500) throw new Error('Local enhancement produced empty output');
+    return result;
+  } finally {
+    for (const f of [inFile, outFile]) try { fs.unlinkSync(f); } catch {}
+  }
+}
+
+// ── Robust enhance: try Vyro AI, fall back to local ────────────────────────
+async function enhanceImage(imageBuffer, operation) {
+  // 1. Try Vyro AI (primary)
+  try {
+    return await vyroAiRequest(imageBuffer, operation);
+  } catch (e1) {
+    console.warn(`[enhance] Vyro AI failed (${e1.message}), trying local fallback...`);
+  }
+
+  // 2. Local ffmpeg fallback — detect missing ffmpeg and give a clear user-facing message
+  try {
+    return await enhanceLocal(imageBuffer, operation);
+  } catch (e2) {
+    // ffmpegRun throws the literal string 'ffmpeg not installed…' when ENOENT fires.
+    // Match that exact phrase to avoid misclassifying other ffmpeg runtime errors.
+    const isMissingFfmpeg = e2.message.startsWith('ffmpeg not installed');
+    if (isMissingFfmpeg) {
+      throw new Error(
+        'The AI enhancer (Vyro) is unavailable and ffmpeg is not installed for local fallback.\n\n' +
+        '📌 *Fix:* Ask your bot admin to install ffmpeg (add `ffmpeg` to replit.nix packages).'
+      );
+    }
+    throw new Error(`Enhancement failed: ${e2.message}`);
+  }
+}
+
 // ── Remove background — free public fallback chain ────────────────────────
 // 1. api.theresav.biz.id (free, no key)
 // 2. api.nexray.eu.cc    (URL-based, free)
@@ -312,7 +366,7 @@ const toolsCommands = {
       await sock.sendMessage(jid, { text: `✨ Enhancing image with AI (${op})...` });
       try {
         const buf    = await dlQuoted(sock, jid, message, quoted);
-        const result = await vyroAiRequest(buf, op);
+        const result = await enhanceImage(buf, op);
         await sock.sendMessage(jid, { image: result, caption: `✨ *AI Enhanced Image* (${op})` });
       } catch (err) {
         await sock.sendMessage(jid, { text: `❌ Enhancement failed: ${err.message}` });
@@ -347,7 +401,7 @@ const toolsCommands = {
       await sock.sendMessage(jid, { text: `🌫️ Removing haze with AI...` });
       try {
         const buf    = await dlQuoted(sock, jid, message, quoted);
-        const result = await vyroAiRequest(buf, 'dehaze');
+        const result = await enhanceImage(buf, 'dehaze');
         await sock.sendMessage(jid, { image: result, caption: `🌫️ *Dehazed Image*` });
       } catch (err) {
         await sock.sendMessage(jid, { text: `❌ Dehaze failed: ${err.message}` });
@@ -444,7 +498,7 @@ const toolsCommands = {
       await sock.sendMessage(jid, { text: `🎨 Colorizing image with AI...` });
       try {
         const buf    = await dlQuoted(sock, jid, message, quoted);
-        const result = await vyroAiRequest(buf, 'recolor');
+        const result = await enhanceImage(buf, 'recolor');
         await sock.sendMessage(jid, { image: result, caption: `🎨 *AI Colorized Image*` });
       } catch (err) {
         await sock.sendMessage(jid, { text: `❌ Colorize failed: ${err.message}` });
