@@ -171,44 +171,72 @@ const ownerCommands = {
   },
 
   autostatus: {
-    category: 'owner', desc: 'Toggle auto-viewing of status updates',
-    usage: '.autostatus', aliases: [], permissions: 'owner',
-    examples: ['.autostatus'],
+    category: 'owner', desc: 'Turn auto-viewing of status updates on/off',
+    usage: '.autostatus <on|off>', aliases: [], permissions: 'owner',
+    examples: ['.autostatus on', '.autostatus off'],
     exec: ownerOnly(async (args, sock, jid) => {
-      const v = !db.getSetting('autoStatus', false);
+      const sub = (args[0] || '').toLowerCase();
+      if (sub !== 'on' && sub !== 'off') {
+        const cur = db.getSetting('autoStatus', false);
+        return sock.sendMessage(jid, {
+          text: `👁️ Auto-Status is currently *${cur ? 'ON' : 'OFF'}*.\n\nUsage: *.autostatus on* or *.autostatus off*`
+        });
+      }
+      const v = sub === 'on';
       db.setSetting('autoStatus', v);
       await sock.sendMessage(jid, { text: `👁️ Auto-Status: ${v ? '✅ Enabled' : '❌ Disabled'}` });
     })
   },
 
   autostatusreact: {
-    category: 'owner', desc: 'Toggle auto-reacting to status updates',
-    usage: '.autostatusreact', aliases: [], permissions: 'owner',
-    examples: ['.autostatusreact'],
+    category: 'owner', desc: 'Turn auto-reacting to status updates on/off',
+    usage: '.autostatusreact <on|off>', aliases: [], permissions: 'owner',
+    examples: ['.autostatusreact on', '.autostatusreact off'],
     exec: ownerOnly(async (args, sock, jid) => {
-      const v = !db.getSetting('autoStatusReact', false);
+      const sub = (args[0] || '').toLowerCase();
+      if (sub !== 'on' && sub !== 'off') {
+        const cur = db.getSetting('autoStatusReact', false);
+        return sock.sendMessage(jid, {
+          text: `❤️ Auto-Status React is currently *${cur ? 'ON' : 'OFF'}*.\n\nUsage: *.autostatusreact on* or *.autostatusreact off*`
+        });
+      }
+      const v = sub === 'on';
       db.setSetting('autoStatusReact', v);
       await sock.sendMessage(jid, { text: `❤️ Auto-Status React: ${v ? '✅ Enabled' : '❌ Disabled'}` });
     })
   },
 
   autoread: {
-    category: 'owner', desc: 'Toggle auto-reading (mark messages as read)',
-    usage: '.autoread', aliases: [], permissions: 'owner',
-    examples: ['.autoread'],
+    category: 'owner', desc: 'Turn auto-reading (mark messages as read) on/off',
+    usage: '.autoread <on|off>', aliases: [], permissions: 'owner',
+    examples: ['.autoread on', '.autoread off'],
     exec: ownerOnly(async (args, sock, jid) => {
-      const v = !db.getSetting('autoRead', false);
+      const sub = (args[0] || '').toLowerCase();
+      if (sub !== 'on' && sub !== 'off') {
+        const cur = db.getSetting('autoRead', false);
+        return sock.sendMessage(jid, {
+          text: `📖 Auto-Read is currently *${cur ? 'ON' : 'OFF'}*.\n\nUsage: *.autoread on* or *.autoread off*`
+        });
+      }
+      const v = sub === 'on';
       db.setSetting('autoRead', v);
       await sock.sendMessage(jid, { text: `📖 Auto-Read: ${v ? '✅ Enabled' : '❌ Disabled'}` });
     })
   },
 
   autotyping: {
-    category: 'owner', desc: 'Toggle auto-typing indicator when processing commands',
-    usage: '.autotyping', aliases: [], permissions: 'owner',
-    examples: ['.autotyping'],
+    category: 'owner', desc: 'Turn auto-typing indicator when processing commands on/off',
+    usage: '.autotyping <on|off>', aliases: [], permissions: 'owner',
+    examples: ['.autotyping on', '.autotyping off'],
     exec: ownerOnly(async (args, sock, jid) => {
-      const v = !db.getSetting('autoTyping', false);
+      const sub = (args[0] || '').toLowerCase();
+      if (sub !== 'on' && sub !== 'off') {
+        const cur = db.getSetting('autoTyping', false);
+        return sock.sendMessage(jid, {
+          text: `⌨️ Auto-Typing is currently *${cur ? 'ON' : 'OFF'}*.\n\nUsage: *.autotyping on* or *.autotyping off*`
+        });
+      }
+      const v = sub === 'on';
       db.setSetting('autoTyping', v);
       await sock.sendMessage(jid, { text: `⌨️ Auto-Typing: ${v ? '✅ Enabled' : '❌ Disabled'}` });
     })

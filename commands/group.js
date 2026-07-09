@@ -257,15 +257,15 @@ const groupCommands = {
     }
   },
 
-  setpp: {
+  setgpp: {
     category: 'group', desc: 'Change the group profile picture (reply to an image)',
-    usage: '.setpp', aliases: [], permissions: 'admin',
-    examples: ['.setpp (reply to an image)'],
+    usage: '.setgpp', aliases: [], permissions: 'admin',
+    examples: ['.setgpp (reply to an image)'],
     exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
       if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
       const quoted = message.message?.extendedTextMessage?.contextInfo?.quotedMessage;
       if (!quoted?.imageMessage) {
-        return sock.sendMessage(jid, { text: '🖼️ Reply to an *image* with *.setpp* to set it as the group picture.' });
+        return sock.sendMessage(jid, { text: '🖼️ Reply to an *image* with *.setgpp* to set it as the group picture.' });
       }
       await sock.sendMessage(jid, { text: `🖼️ Setting group profile picture...` });
       try {

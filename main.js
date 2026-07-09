@@ -742,6 +742,13 @@ function attachHandlers(sock, saveCreds) {
             continue;
           }
 
+          // ── Auto-Read: mark incoming messages as read when enabled ──
+          if (!isFromMe && db.getSetting('autoRead', false)) {
+            sock.readMessages([message.key]).catch(e =>
+              console.error('[handler] autoRead:', e.message)
+            );
+          }
+
           if (!isFromMe) {
             await handleAutoReact(sock, message).catch(e =>
               console.error('[handler] autoReact:', e.stack || e.message)
@@ -783,9 +790,20 @@ function attachHandlers(sock, saveCreds) {
 
           console.log(`[WA] dispatching .${command} to handleCommand (sock#${sockId})`);
 
+          // ── Auto-Typing: show a typing indicator while a command runs ──
+          if (db.getSetting('autoTyping', false)) {
+            sock.sendPresenceUpdate('composing', jid).catch(e =>
+              console.error('[handler] autoTyping:', e.message)
+            );
+          }
+
           handleCommand(command, parts, message, sock, botConfig).catch(err =>
             console.error(`[cmd] .${command} unhandled exception:\n${err.stack || err.message}`)
-          );
+          ).finally(() => {
+            if (db.getSetting('autoTyping', false)) {
+              sock.sendPresenceUpdate('paused', jid).catch(() => {});
+            }
+          });
         }
       }
     }
