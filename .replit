@@ -11,3 +11,4 @@ channel = "stable-25_05"
 
 [userenv.shared]
 OWNER_NUMBER = "2349112097911"
+ZST_API_KEY = "zst_QFpFjVK9LlJPB8BEujrSz3TdHHld52vVam9rQWrq"

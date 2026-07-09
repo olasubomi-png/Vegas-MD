@@ -62,6 +62,12 @@ const CATEGORY_META = {
   converter:  { label: 'Converter' },
   sticker:    { label: 'Tools' },
   utility:    { label: 'Utility' },
+  // ZST Labs powered categories
+  movies:     { label: 'Movies' },
+  anime:      { label: 'Anime' },
+  sports:     { label: 'Sports' },
+  religion:   { label: 'Religion' },
+  canvas:     { label: 'Canvas' },
 };
 
 // ─────────────────────────────────────────────────────────

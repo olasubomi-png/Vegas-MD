@@ -13,7 +13,9 @@ const categoryRegistry = {}; // { catKey: string[] }
 const CATEGORY_ORDER = [
   'moderation', 'ai', 'audio', 'downloader', 'fun', 'games',
   'group', 'general', 'economy', 'owner', 'search', 'converter',
-  'sticker', 'utility'
+  'sticker', 'utility',
+  // ZST Labs powered categories
+  'movies', 'anime', 'sports', 'religion', 'canvas'
 ];
 
 function register(mod, sourceLabel) {

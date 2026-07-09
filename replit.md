@@ -1,126 +1,64 @@
-# OLASUBOMI-MD — WhatsApp Bot
+# OLASUBOMI-MD WhatsApp Bot
 
-An advanced WhatsApp bot built on [Baileys](https://github.com/WhiskeySockets/Baileys). Connects via **pairing code** — no QR scanning needed.
+Advanced WhatsApp bot with 400+ commands powered by Baileys and the ZST Labs API.
 
 ## Stack
 - **Runtime**: Node.js 20
-- **WhatsApp**: Baileys v7
-- **AI**: OpenAI, Anthropic Claude, Google Gemini (real APIs + free fallback)
-- **Database**: Pure-JS JSON (no native compilation needed) → `data/database.json`
-- **Entry point**: `main.js`
-- **Commands**: `commands/` directory
-- **Plugins**: `plugins/` directory (auto-loaded on startup)
+- **WhatsApp**: Baileys v7 (pairing code authentication — no QR needed)
+- **API**: ZST Labs (https://zstlab.cyou) — 317 endpoints
+- **Database**: JSON flat-file via `lib/database.js`
 
 ## How to Run
-
 ```bash
-node main.js
+npm install
+npm start
 ```
 
-First run: enter your WhatsApp number (digits + country code, e.g. `2348012345678`). A pairing code appears — enter it in WhatsApp → Settings → Linked Devices → Link Device.
+On first run, enter your WhatsApp number when prompted. A pairing code appears — open WhatsApp → Settings → Linked Devices → Link Device → Enter Code.
 
-## Required Secrets (Replit Secrets panel)
+## Environment Variables / Secrets
+| Key | Description |
+|-----|-------------|
+| `OWNER_NUMBER` | Owner's WhatsApp number (e.g. `2349112097911`) |
+| `ZST_API_KEY` | ZST Labs API key for 60+ ZST-powered commands |
 
-| Secret | Required | Description |
-|--------|----------|-------------|
-| `OWNER_NUMBER` | ✅ Yes | Your number with country code, digits only (e.g. `2348012345678`) |
-| `OWNER_NAME` | Optional | Your name (default: Olasubomi) |
-| `BOT_MODE` | Optional | `private` (owner only) or `public` (default: `private`) |
-| `BOT_PREFIX` | Optional | Command prefix (default: `.`) |
-| `OPENAI_API_KEY` | Optional | Real ChatGPT/GPT-4/Copilot responses |
-| `ANTHROPIC_API_KEY` | Optional | Real Claude responses |
-| `GOOGLE_AI_API_KEY` | Optional | Real Gemini responses |
-
-> Without AI keys the bot falls back to pollinations.ai (free, no key needed).
-
-## File Structure
-
+## Project Structure
 ```
-main.js                 Entry point — connection, event dispatch
-lib/
-  database.js           JSON database (users, groups, economy, warnings, bans)
-  helpers.js            Shared utilities (URL detection, cooldowns, admin checks)
-commands/
-  index.js              Auto-loads all commands + plugins/ directory
-  main.js               Menu (category-based), ping, alive, uptime, status
-  ai.js                 GPT, GPT-4, Claude, Gemini, Copilot, translate, summarize
-  group.js              Promote, demote, kick, mute, tagall + protection toggles
-  moderation.js         Warn, unwarn, setwelcome, setgoodbye, setmaxwarn
-  economy.js            Balance, daily, work, pay, leaderboard, profile
-  owner.js              Dashboard, setmode, setprefix, ban, broadcast, autostatus
-  fun.js                Joke, quote, ship, dare, truth, 8ball, roast, compliment
-  audio.js              Bass, deep, fast, slow, reverse, robot, chipmunk
-  tools.js              Font, sticker, enhance, upscale, removebg, blur
-  download.js           TikTok, Facebook, Instagram, YouTube, play
-  settings.js           Settings, prefix, privacy
-events/
-  welcome.js            Auto welcome/goodbye on group participant changes
-  protection.js         Anti-delete, anti-link, anti-spam, anti-view-once, auto-react
-  autoStatus.js         Auto-view + auto-react to WhatsApp status updates
-plugins/
-  example.js            Example plugin — copy to add your own commands
-data/
-  database.json         Auto-created on first run
+commands/         Core command files (ai, fun, search, tools, etc.)
+plugins/          Plugin commands (zstlab.js — 79 ZST Labs commands)
+lib/              Database, helpers, session manager
+data/             JSON data files
+assets/           Menu banner image
+events/           WhatsApp event handlers
 ```
 
-## Menu System
+## Command Categories (19 total)
+| Category  | Commands | Description |
+|-----------|----------|-------------|
+| Admin      | 6  | Group moderation (warn, kick, promote) |
+| AI         | 17 | ChatGPT, Claude, Gemini, DeepSeek, ZST AI |
+| Audio      | 8  | Bass, robot, pitch, speed effects |
+| Downloader | 17 | TikTok, Instagram, YouTube, social |
+| Fun        | 22 | Jokes, quotes, facts, trivia, animals |
+| Games      | 4  | Trivia game, hangman, tic-tac-toe |
+| Group      | 20 | Welcome, antilink, tagall, settings |
+| General    | 6  | Menu, help, ping, alive, uptime |
+| Economy    | 7  | Balance, daily, work, pay |
+| Owner      | 26 | Mode, broadcast, ban, settings |
+| Search     | 15 | Web, news, country, dictionary, space |
+| Converter  | 7  | QR, voice note, TTS, sticker |
+| Tools      | 30 | Weather, crypto, IP, hash, calc, currency |
+| Utility    | 10 | Font, echo, JID, prefix, privacy |
+| **Movies** | 7  | YTS, Nkiri, DramaKey, FzMovies, FzSeries |
+| **Anime**  | 7  | Neko, waifu, anime search, konachan |
+| **Sports** | 8  | EPL, La Liga, UCL, live matches, scores |
+| **Religion** | 6 | Bible, Quran, Hymns |
+| **Canvas** | 5  | ATM card, tweet, YouTube comment, chat |
 
-```
-.menu              → shows all category shortcuts
-.menu ai           → AI commands
-.menu group        → Group management + protection
-.menu mod          → Moderation (warn, ban, welcome)
-.menu economy      → Coins, daily, work, pay
-.menu owner        → Owner dashboard (owner only)
-.menu fun          → Jokes, games, quotes
-.menu audio        → Audio effects
-.menu tools        → Image tools
-.menu download     → Media downloaders
-```
-
-## Plugin System
-
-Drop a `.js` file into `plugins/` — it's auto-loaded on startup. Export a `commands` object:
-
-```js
-// plugins/myfeature.js
-module.exports = {
-  commands: {
-    mycommand: {
-      desc: 'Description shown in menu',
-      exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
-        await sock.sendMessage(jid, { text: 'Hello!' });
-      }
-    }
-  }
-};
-```
-
-## Group Protection Features (per-group, persisted in DB)
-
-Toggle with admin commands in any group:
-
-| Command | What it does |
-|---------|-------------|
-| `.antilink` | Auto-delete links, warn sender, kick at limit |
-| `.antidelete` | Re-post deleted messages to the group |
-| `.antispam` | Rate-limit members (>6 msgs/5s = warning) |
-| `.antiviewonce` | Re-send view-once photos/videos for everyone |
-| `.autoreact` | React to messages with random emoji |
-| `.welcome` | Send welcome message when members join |
-| `.goodbye` | Send goodbye message when members leave |
-| `.groupsettings` | View all current toggles |
-
-## Economy System
-
-- `.daily` — 500 coins/day
-- `.work` — 50–300 coins, 3h cooldown
-- `.pay @user <amount>` — transfer coins
-- `.leaderboard` — top 10 richest
-- XP earned from daily and work, levels up every 500 XP
+## Default Bot Prefix
+`.` (configurable via `.setprefix`)
 
 ## User Preferences
-- Pairing-code login (no QR scanning)
-- Preserve existing command structure and file layout
-- AI commands fall back to pollinations.ai (free) when API keys are not set
-- Pure-JS database — no native module compilation required
+- Keep existing project structure and stack
+- New ZST Labs commands go in `plugins/zstlab.js`
+- New categories registered in `commands/index.js` CATEGORY_ORDER and `commands/main.js` CATEGORY_META

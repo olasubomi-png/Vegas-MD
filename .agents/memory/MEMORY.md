@@ -1,0 +1,1 @@
+- [ZST Labs plugin](zstlab-plugin.md) — 79 commands in plugins/zstlab.js; ZST_API_KEY in env; adds movies/anime/sports/religion/canvas categories
