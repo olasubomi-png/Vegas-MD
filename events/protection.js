@@ -173,10 +173,17 @@ async function handleAntiDelete(sock, deletedKeys) {
           }).catch(() => {});
         }
       } else {
-        // DM — simple text notification
-        await sock.sendMessage(chatJid, {
-          text: `🗑️ *Anti-Delete Alert*\n\nYou deleted a message:\n\n"${cached.text}"`
-        });
+        // DM — notify in the chat itself
+        const dmText =
+          `🗑️ *Anti-Delete Alert*\n\n` +
+          `👤 *From:* @${senderNum}\n` +
+          `💬 *Message:* ${cached.text || `[${cached.mediaType || 'Media'}]`}`;
+        await sock.sendMessage(chatJid, { text: dmText, mentions: [cached.sender] });
+
+        // Also forward to owner's JID so it appears on their device
+        if (ownerJid && ownerJid !== chatJid) {
+          await sock.sendMessage(ownerJid, { text: dmText }).catch(() => {});
+        }
       }
     } catch (err) {
       console.error('[antiDelete]', err.message);

@@ -604,4 +604,39 @@ const toolsCommands = {
   }
 };
 
+  // ── Text-to-Speech (Google TTS — free, no key needed) ──
+  tts: {
+    category: 'tools', desc: 'Convert text to a voice note',
+    usage: '.tts <text>', aliases: ['speak', 'voice'], permissions: 'all',
+    examples: ['.tts Hello world', '.tts (reply to a message)'],
+    exec: async (args, sock, jid, isGroup, sender, message) => {
+      // Accept text from args OR from a quoted reply
+      let text = args.join(' ').trim();
+      if (!text) {
+        const q = message.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+        text = q?.conversation || q?.extendedTextMessage?.text || '';
+      }
+      if (!text) return sock.sendMessage(jid, { text: '❌ Usage: .tts <text>  or reply to a message with .tts' });
+      if (text.length > 200) return sock.sendMessage(jid, { text: '❌ Text too long — keep it under 200 characters.' });
+
+      await sock.sendMessage(jid, { text: `🎤 Converting to voice note...` });
+      try {
+        const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text)}&tl=en&client=tw-ob`;
+        const { data } = await axios.get(url, {
+          responseType: 'arraybuffer',
+          timeout: 20000,
+          headers: { 'User-Agent': 'Mozilla/5.0' }
+        });
+        await sock.sendMessage(jid, {
+          audio:    Buffer.from(data),
+          mimetype: 'audio/mpeg',
+          ptt:      true
+        });
+      } catch (err) {
+        await sock.sendMessage(jid, { text: `❌ TTS failed: ${err.message}` });
+      }
+    }
+  }
+};
+
 module.exports = toolsCommands;

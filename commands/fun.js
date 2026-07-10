@@ -183,6 +183,44 @@ const funCommands = {
       });
     }
   },
+  // ── Riddle game (from reference repo) ──────────────────
+  riddle: {
+    category: 'fun', desc: 'Start a riddle — reply with .riddle A/B/C/D to answer',
+    usage: '.riddle [A|B|C|D]', aliases: [], permissions: 'all',
+    examples: ['.riddle', '.riddle B'],
+    exec: (() => {
+      const RIDDLES = [
+        { q: 'What has keys but no locks, space but no room, and you can enter but not go inside?', options: ['A) Computer','B) Keyboard','C) Piano','D) House'], answer: 'B' },
+        { q: "I'm tall when I'm young, and short when I'm old. What am I?", options: ['A) Tree','B) Building','C) Candle','D) Person'], answer: 'C' },
+        { q: 'What gets wet while drying?', options: ['A) Soap','B) Towel','C) Hair','D) Clothes'], answer: 'B' },
+        { q: 'What has one eye but cannot see?', options: ['A) Cyclops','B) Camera','C) Storm','D) Needle'], answer: 'D' },
+        { q: 'What goes up but never comes down?', options: ['A) Balloon','B) Age','C) Smoke','D) Airplane'], answer: 'B' },
+        { q: 'The more you take, the more you leave behind. What am I?', options: ['A) Time','B) Money','C) Footsteps','D) Breath'], answer: 'C' },
+        { q: 'What has a head, a tail, but no body?', options: ['A) Snake','B) Coin','C) Arrow','D) River'], answer: 'B' },
+        { q: 'What can travel around the world while staying in a corner?', options: ['A) Shadow','B) Stamp','C) Spider','D) Clock'], answer: 'B' }
+      ];
+      const active = new Map(); // jid → riddle
+      return async (args, sock, jid) => {
+        const guess = (args[0] || '').toUpperCase();
+        if (guess.match(/^[ABCD]$/)) {
+          const r = active.get(jid);
+          if (!r) return sock.sendMessage(jid, { text: '❓ No active riddle. Send *.riddle* to start one.' });
+          if (guess === r.answer) {
+            active.delete(jid);
+            return sock.sendMessage(jid, { text: `🎉 Correct! The answer was *${r.answer}*.\n\nSend *.riddle* for another one!` });
+          } else {
+            return sock.sendMessage(jid, { text: `❌ Wrong! Try again (${r.options.join(' / ')}) or send *.riddle* to skip.` });
+          }
+        }
+        const r = RIDDLES[Math.floor(Math.random() * RIDDLES.length)];
+        active.set(jid, r);
+        await sock.sendMessage(jid, {
+          text: `🧩 *Riddle Time!*\n\n${r.q}\n\n${r.options.join('\n')}\n\n_Reply with .riddle A / B / C / D_`
+        });
+      };
+    })()
+  },
+
   hack: {
     category: 'fun', desc: 'Fake-hack someone (for fun)',
     usage: '.hack [@user]', aliases: [], permissions: 'all',

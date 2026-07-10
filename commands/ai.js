@@ -35,9 +35,19 @@ async function askGemini(query) {
 }
 
 async function askPollinations(query, model = 'openai') {
-  const url = `https://text.pollinations.ai/${encodeURIComponent(query)}?model=${model}&seed=${Math.floor(Math.random() * 9999)}`;
-  const res  = await axios.get(url, { timeout: 45000, headers: { 'User-Agent': 'OLASUBOMI-MD/3.0.0' } });
-  return String(res.data).trim();
+  const seed = Math.floor(Math.random() * 99999);
+  const url  = `https://text.pollinations.ai/${encodeURIComponent(query)}?model=${model}&seed=${seed}`;
+  const res  = await axios.get(url, {
+    timeout: 60000,
+    responseType: 'text',
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      'Accept':     'text/plain, */*'
+    }
+  });
+  const text = typeof res.data === 'string' ? res.data.trim() : String(res.data || '').trim();
+  if (!text) throw new Error('Empty response from AI service');
+  return text;
 }
 
 async function handleAI(args, sock, jid, opts = {}) {
@@ -187,8 +197,8 @@ const aiCommands = {
       await sock.sendMessage(jid, { text: `${modeLabel} *Imagine AI* generating...\n\n_"${prompt}"_` });
       try {
         const encoded = encodeURIComponent(prompt);
-        const seed    = Math.floor(Math.random() * 999999);
-        const imgUrl  = `https://image.pollinations.ai/prompt/${encoded}?model=${model}&width=1024&height=1024&nologo=true${extraParam}&seed=${seed}`;
+        // seed=-1 lets pollinations pick a stable seed; enhance=true always for better quality
+        const imgUrl  = `https://image.pollinations.ai/prompt/${encoded}?model=${model}&width=1024&height=1024&nologo=true&enhance=true&seed=-1`;
 
         // Pass URL directly — Baileys lets WhatsApp's servers fetch the image,
         // avoiding Cloudflare blocks that affect direct server-side downloads.

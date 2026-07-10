@@ -308,6 +308,33 @@ const searchCommands = {
     }
   },
 
+  // ── Wikimedia Commons image search (free, no key) ───
+  wikimedia: {
+    category: 'search', desc: 'Search images on Wikimedia Commons',
+    usage: '.wikimedia <query>', aliases: ['wiki'], permissions: 'all',
+    examples: ['.wikimedia lion', '.wikimedia Eiffel Tower'],
+    exec: async (args, sock, jid) => {
+      const q = args.join(' ').trim();
+      if (!q) return sock.sendMessage(jid, { text: '❌ Usage: .wikimedia <query>' });
+      await sock.sendMessage(jid, { text: `🌐 Searching Wikimedia for _"${q}"_...` });
+      try {
+        const { data } = await axios.get('https://commons.wikimedia.org/w/api.php', {
+          params: { action: 'query', generator: 'search', gsrsearch: q, gsrlimit: 6, prop: 'imageinfo', iiprop: 'url', format: 'json' },
+          timeout: 10000
+        });
+        const pages = data.query?.pages;
+        if (!pages) return sock.sendMessage(jid, { text: `😔 No images found for "${q}".` });
+        const urls = Object.values(pages).map(p => p.imageinfo?.[0]?.url).filter(Boolean).slice(0, 3);
+        if (!urls.length) return sock.sendMessage(jid, { text: `😔 No images found for "${q}".` });
+        for (let i = 0; i < urls.length; i++) {
+          await sock.sendMessage(jid, { image: { url: urls[i] }, caption: `🌐 Wikimedia result ${i + 1} for "${q}"` });
+        }
+      } catch (err) {
+        await sock.sendMessage(jid, { text: `❌ Wikimedia search failed: ${err.message}` });
+      }
+    }
+  },
+
   // ── Pinterest (redirect — no usable API without auth) ─
   pinterest: {
     category: 'search', desc: 'Search Pinterest for images',
