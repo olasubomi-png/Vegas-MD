@@ -34,11 +34,8 @@ outputType = "webview"
 [userenv.shared]
 OWNER_NUMBER = "2349112097911"
 ZST_API_KEY = "zst_QFpFjVK9LlJPB8BEujrSz3TdHHld52vVam9rQWrq"
-DASHBOARD_PASSWORD = "mickyp007"
-JWT_SECRET = "89bef40356129a8aa564058bda7fe90ef3306e1c15f2231b579ba8d03be0c647"
 BOT_API_URL = "http://localhost:8090"
 DASHBOARD_API_ENABLED = "true"
-DASHBOARD_API_KEY = "06f8e609d105ba0ee6d0e1b4d760c1846cd5b2d8fed706b9"
 
 [[ports]]
 localPort = 5000
