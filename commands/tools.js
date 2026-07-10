@@ -603,7 +603,7 @@ const toolsCommands = {
     }
   },
 
-  // ── Text-to-Speech (Google TTS — free, no key needed) ──
+  // ── Text-to-Speech (Google TTS → OGG/Opus via ffmpeg) ──
   tts: {
     category: 'tools', desc: 'Convert text to a voice note',
     usage: '.tts <text>', aliases: ['speak', 'voice'], permissions: 'all',
@@ -619,20 +619,43 @@ const toolsCommands = {
       if (text.length > 200) return sock.sendMessage(jid, { text: '❌ Text too long — keep it under 200 characters.' });
 
       await sock.sendMessage(jid, { text: `🎤 Converting to voice note...` });
+
+      const mp3File = tmpFile('.mp3');
+      const oggFile = tmpFile('.ogg');
       try {
-        const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text)}&tl=en&client=tw-ob`;
-        const { data } = await axios.get(url, {
+        // 1. Download MP3 from Google TTS
+        const ttsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text)}&tl=en&client=tw-ob`;
+        const { data } = await axios.get(ttsUrl, {
           responseType: 'arraybuffer',
           timeout: 20000,
           headers: { 'User-Agent': 'Mozilla/5.0' }
         });
+        fs.writeFileSync(mp3File, Buffer.from(data));
+
+        // 2. Convert MP3 → OGG/Opus (WhatsApp PTT requires this format)
+        await new Promise((resolve, reject) => {
+          const proc = spawn('ffmpeg', [
+            '-y', '-i', mp3File,
+            '-vn', '-c:a', 'libopus', '-b:a', '64k', '-ar', '48000', '-ac', '1',
+            oggFile
+          ]);
+          let stderr = '';
+          proc.stderr.on('data', d => { stderr += d.toString(); });
+          proc.on('close', code => code === 0 ? resolve() : reject(new Error(`ffmpeg: ${stderr.slice(-200)}`)));
+          proc.on('error', () => reject(new Error('ffmpeg not found — run: sudo apt install ffmpeg')));
+        });
+
+        // 3. Send as PTT voice note
         await sock.sendMessage(jid, {
-          audio:    Buffer.from(data),
-          mimetype: 'audio/mpeg',
+          audio:    fs.readFileSync(oggFile),
+          mimetype: 'audio/ogg; codecs=opus',
           ptt:      true
         });
       } catch (err) {
         await sock.sendMessage(jid, { text: `❌ TTS failed: ${err.message}` });
+      } finally {
+        // Clean up temp files
+        [mp3File, oggFile].forEach(f => { try { fs.unlinkSync(f); } catch {} });
       }
     }
   }

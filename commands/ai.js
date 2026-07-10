@@ -197,13 +197,25 @@ const aiCommands = {
       await sock.sendMessage(jid, { text: `${modeLabel} *Imagine AI* generating...\n\n_"${prompt}"_` });
       try {
         const encoded = encodeURIComponent(prompt);
-        // seed=-1 lets pollinations pick a stable seed; enhance=true always for better quality
-        const imgUrl  = `https://image.pollinations.ai/prompt/${encoded}?model=${model}&width=1024&height=1024&nologo=true&enhance=true&seed=-1`;
+        const seed    = Math.floor(Math.random() * 999999);
+        const imgUrl  = `https://image.pollinations.ai/prompt/${encoded}?model=${model}&width=1024&height=1024&nologo=true&enhance=true&seed=${seed}`;
 
-        // Pass URL directly — Baileys lets WhatsApp's servers fetch the image,
-        // avoiding Cloudflare blocks that affect direct server-side downloads.
+        // Download buffer on the server with full browser headers.
+        // Passing { url } directly to Baileys fails because Baileys' internal
+        // fetch is blocked by Cloudflare on AWS EC2 IPs.
+        const { data: imgData } = await axios.get(imgUrl, {
+          responseType: 'arraybuffer',
+          timeout:      90000,
+          headers: {
+            'User-Agent':      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer':         'https://pollinations.ai/',
+            'Accept':          'image/webp,image/apng,image/*,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9'
+          }
+        });
+
         await sock.sendMessage(jid, {
-          image:   { url: imgUrl },
+          image:   Buffer.from(imgData),
           caption: `${modeLabel} *Imagine AI*\n\n_"${prompt}"_`
         });
       } catch (err) {
