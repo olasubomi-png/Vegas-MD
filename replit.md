@@ -58,6 +58,18 @@ events/           WhatsApp event handlers
 ## Default Bot Prefix
 `.` (configurable via `.setprefix`)
 
+## Dashboard: User Accounts, Coins & Self-Service Deploy
+`dashboard/` (Express + React) has two separate login systems:
+- **Admin login** (`/login`) — single shared password (`DASHBOARD_PASSWORD` secret), full control panel.
+- **User accounts** (`/account`, `/account/login`) — sign in with Google. Each account gets:
+  - A coin balance (10 free coins on signup, +10/day via a claim button, once per 24h).
+  - A self-service flow: enter your WhatsApp number → "Deploy" spends 10 coins, sets it as the bot's `OWNER_NUMBER`, and requests a pairing code (visible on the admin Bot Status page). Only one active deployment per account.
+  - Auto-renewal every 3 days: the deploy scheduler (`dashboard/server/deployScheduler.js`) deducts another 10 coins to keep it running, or stops it if the balance is too low.
+
+**Known architecture limitation**: this codebase runs a single WhatsApp/Baileys session (one `auth_info_baileys/` folder, one process) — it is not yet multi-tenant. The dashboard enforces "only one *global* active deployment at a time" via a Mongo-backed lock (`Setting.activeDeploymentUser`), so a second account can't deploy while another's session is live; it does not spin up isolated bot instances per account. True per-account isolated bot instances would need a real architecture change (see follow-up task).
+
+Required secrets for the dashboard: `MONGODB_URI`, `JWT_SECRET`, `DASHBOARD_PASSWORD`, `DASHBOARD_API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`. Google OAuth redirect URI must be `https://<your-repl-domain>/api/user/auth/google/callback` in Google Cloud Console.
+
 ## User Preferences
 - Keep existing project structure and stack
 - New ZST Labs commands go in `plugins/zstlab.js`

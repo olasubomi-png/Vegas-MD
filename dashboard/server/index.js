@@ -3,14 +3,17 @@ const path = require('path');
 const fs = require('fs');
 const express = require('express');
 const cors = require('cors');
+const cookieParser = require('cookie-parser');
 const http = require('http');
 const { Server: SocketIOServer } = require('socket.io');
 const { io: ioClient } = require('socket.io-client');
 
 const { connectMongo } = require('./mongo');
 const routes = require('./routes');
+const userRoutes = require('./userRoutes');
 const bot = require('./botClient');
 const { verifyToken } = require('./auth');
+const { startDeployScheduler } = require('./deployScheduler');
 
 const PORT = parseInt(process.env.PORT || '5000', 10);
 const CLIENT_DIST = path.join(__dirname, '..', 'client', 'dist');
@@ -20,9 +23,14 @@ async function main() {
 
   const app = express();
   app.use(cors());
+  app.use(cookieParser());
   app.use(express.json({ limit: '5mb' }));
 
+  // Mounted before the general /api router so its own auth (Google-account
+  // JWTs) applies instead of falling through to the admin-only requireAuth.
+  app.use('/api/user', userRoutes);
   app.use('/api', routes);
+  startDeployScheduler();
 
   if (fs.existsSync(CLIENT_DIST)) {
     app.use(express.static(CLIENT_DIST));

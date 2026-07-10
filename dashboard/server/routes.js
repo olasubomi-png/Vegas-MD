@@ -124,11 +124,27 @@ router.post('/owner', async (req, res) => {
 });
 
 // ── Pair new number ──────────────────────────────────────────────────────
+// Guarded against the self-service account system in userRoutes.js: this bot
+// only runs one live WhatsApp session, and if a paying account currently
+// owns it (Setting 'activeDeploymentUser'), an admin repairing over it would
+// silently break that account's paid deployment. Require an explicit
+// override flag once that's understood.
 router.post('/pair', async (req, res) => {
-  const { number } = req.body || {};
+  const { number, force } = req.body || {};
   if (!number) return res.status(400).json({ error: 'number is required' });
+  try {
+    const lock = await Setting.findOne({ key: 'activeDeploymentUser' });
+    if (lock?.value && !force) {
+      return res.status(409).json({
+        error: 'a user account currently has a paid deployment active on this bot instance — pass force:true to override (this will end their deployment)',
+      });
+    }
+    if (lock?.value && force) {
+      await Setting.findOneAndUpdate({ key: 'activeDeploymentUser' }, { value: null });
+    }
+  } catch (_) {}
   const result = await bot.updateSettings({ ownerNumber: number, requestPairing: true });
-  await logActivity('admin', 'pair-request', { number });
+  await logActivity('admin', 'pair-request', { number, force: Boolean(force) });
   res.json(result);
 });
 

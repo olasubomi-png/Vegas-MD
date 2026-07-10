@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import {
   Activity, Terminal, Users, UsersRound, Puzzle, BarChart3, Radio, KeySquare,
-  Settings, Code2, QrCode, Image, ShieldCheck, DatabaseBackup, Cpu, LogOut, Menu,
+  Settings, Code2, QrCode, Image, ShieldCheck, DatabaseBackup, Cpu, LogOut, Menu, Coins,
 } from 'lucide-react';
 import { setToken } from '../api';
 import { connectSocket } from '../socket';
@@ -23,6 +23,10 @@ const NAV = [
   { to: '/owner', label: 'Owner Management', icon: ShieldCheck },
   { to: '/backup', label: 'DB Backup/Restore', icon: DatabaseBackup },
   { to: '/system', label: 'System Monitor', icon: Cpu },
+];
+
+const EXTERNAL_NAV = [
+  { to: '/account', label: 'My Account (Coins)', icon: Coins },
 ];
 
 export default function Layout() {
@@ -71,6 +75,18 @@ export default function Layout() {
               {label}
             </NavLink>
           ))}
+          <div className="pt-2 mt-2 border-t border-cyber-border">
+            {EXTERNAL_NAV.map(({ to, label, icon: Icon }) => (
+              <a
+                key={to}
+                href={to}
+                className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-cyber-green hover:bg-cyber-panel2/60"
+              >
+                <Icon size={16} />
+                {label}
+              </a>
+            ))}
+          </div>
         </nav>
         <button
           onClick={logout}

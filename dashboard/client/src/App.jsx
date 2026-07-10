@@ -17,6 +17,8 @@ import MenuImage from './pages/MenuImage';
 import Owner from './pages/Owner';
 import Backup from './pages/Backup';
 import System from './pages/System';
+import AccountLogin from './pages/AccountLogin';
+import Account from './pages/Account';
 import { getToken } from './api';
 
 function RequireAuth({ children }) {
@@ -28,6 +30,8 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      <Route path="/account/login" element={<AccountLogin />} />
+      <Route path="/account" element={<Account />} />
       <Route
         path="/"
         element={
