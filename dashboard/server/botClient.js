@@ -9,9 +9,17 @@ let config = {
   apiKey: process.env.DASHBOARD_API_KEY || '',
 };
 
+const changeListeners = [];
+
+function onConfigChange(fn) {
+  changeListeners.push(fn);
+}
+
 function configure({ url, apiKey }) {
-  if (url) config.url = url;
-  if (apiKey) config.apiKey = apiKey;
+  let changed = false;
+  if (url && url !== config.url) { config.url = url; changed = true; }
+  if (apiKey && apiKey !== config.apiKey) { config.apiKey = apiKey; changed = true; }
+  if (changed) changeListeners.forEach((fn) => { try { fn(config); } catch (_) {} });
 }
 
 function getConfig() {
@@ -30,13 +38,16 @@ async function safeCall(fn, fallback) {
   try {
     return await fn();
   } catch (err) {
-    return { error: err.response?.data?.error || err.message, offline: true, ...(fallback || {}) };
+    const error = err.response?.data?.error || err.message;
+    if (Array.isArray(fallback)) return fallback; // keep array shape so callers can safely .map()
+    return { error, offline: true, ...(fallback || {}) };
   }
 }
 
 module.exports = {
   configure,
   getConfig,
+  onConfigChange,
   getStatus: () => safeCall(async () => (await client().get('/status')).data, { connection: 'unknown' }),
   getLogs: () => safeCall(async () => (await client().get('/logs')).data, []),
   getUsers: () => safeCall(async () => (await client().get('/users')).data, []),

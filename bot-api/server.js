@@ -76,10 +76,22 @@ function startBotApi({ port, database, getUsers, getGroups, getPlugins, broadcas
   app.post('/settings', async (req, res) => {
     try {
       const updates = req.body || {};
+      const wantsPairing = updates.requestPairing === true;
       for (const [k, v] of Object.entries(updates)) {
+        if (k === 'requestPairing') continue; // signal only, not a persisted setting
         if (k === 'prefix') state.prefix = v;
         if (k === 'mode') state.mode = v;
         await setSetting?.(k, v);
+      }
+      if (wantsPairing) {
+        // A new/changed ownerNumber only takes effect on a fresh socket, so
+        // force a reconnect. main.js reads the just-persisted ownerNumber
+        // setting and requests a pairing code once the new socket comes up.
+        res.json({ ok: true, prefix: state.prefix, mode: state.mode, restarting: true });
+        setTimeout(async () => {
+          try { await restart?.(); } catch (_) { process.exit(0); }
+        }, 300);
+        return;
       }
       res.json({ ok: true, prefix: state.prefix, mode: state.mode });
     } catch (e) {

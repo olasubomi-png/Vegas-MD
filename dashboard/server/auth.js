@@ -1,7 +1,14 @@
 const jwt = require('jsonwebtoken');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'insecure-dev-secret-change-me';
-const ADMIN_PASSWORD = process.env.DASHBOARD_PASSWORD || 'mickyp007';
+const JWT_SECRET = process.env.JWT_SECRET;
+const ADMIN_PASSWORD = process.env.DASHBOARD_PASSWORD;
+
+if (!JWT_SECRET || !ADMIN_PASSWORD) {
+  throw new Error(
+    'JWT_SECRET and DASHBOARD_PASSWORD must be set (as secrets) before starting the dashboard. ' +
+    'No insecure defaults are used.'
+  );
+}
 
 function login(password) {
   if (password !== ADMIN_PASSWORD) return null;

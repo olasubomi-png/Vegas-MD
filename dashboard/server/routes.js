@@ -60,7 +60,8 @@ router.get('/system', (req, res) => {
 router.post('/broadcast', async (req, res) => {
   const { message, target } = req.body || {};
   if (!message) return res.status(400).json({ error: 'message is required' });
-  const result = await bot.broadcast(message, target || 'users');
+  const raw = await bot.broadcast(message, target || 'users');
+  const result = raw?.result ? { ok: raw.ok, ...raw.result } : raw;
   try { await BroadcastLog.create({ message, target, result }); } catch (_) {}
   await logActivity('admin', 'broadcast', { target, length: message.length });
   res.json(result);

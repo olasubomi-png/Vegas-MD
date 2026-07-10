@@ -58,6 +58,7 @@ async function main() {
   setInterval(() => {
     if (!botSocket?.connected) connectBotSocket();
   }, 15000);
+  bot.onConfigChange(() => connectBotSocket());
 
   io.on('connection', (socket) => {
     socket.emit('hello', { connectedAt: Date.now() });
