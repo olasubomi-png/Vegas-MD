@@ -190,19 +190,10 @@ const aiCommands = {
         const seed    = Math.floor(Math.random() * 999999);
         const imgUrl  = `https://image.pollinations.ai/prompt/${encoded}?model=${model}&width=1024&height=1024&nologo=true${extraParam}&seed=${seed}`;
 
-        // Download as buffer first — avoids Baileys "Failed to fetch stream" errors
-        // that occur when the remote URL takes too long to respond.
-        const { data: imgData } = await axios.get(imgUrl, {
-          responseType: 'arraybuffer',
-          timeout:      90000,   // pollinations can take up to ~60 s on first generation
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (compatible; OLASUBOMI-MD/3.0)',
-            'Referer':    'https://pollinations.ai/'
-          }
-        });
-
+        // Pass URL directly — Baileys lets WhatsApp's servers fetch the image,
+        // avoiding Cloudflare blocks that affect direct server-side downloads.
         await sock.sendMessage(jid, {
-          image:   Buffer.from(imgData),
+          image:   { url: imgUrl },
           caption: `${modeLabel} *Imagine AI*\n\n_"${prompt}"_`
         });
       } catch (err) {
@@ -219,18 +210,10 @@ const aiCommands = {
       if (!prompt) return sock.sendMessage(jid, { text: '❌ Usage: .flux <image description>' });
       await sock.sendMessage(jid, { text: `🖼️ *Flux AI* generating...\n\n_"${prompt}"_` });
       try {
-        const encoded  = encodeURIComponent(prompt);
-        const imgUrl   = `https://image.pollinations.ai/prompt/${encoded}?model=flux&width=768&height=768&nologo=true`;
-        const { data: imgData } = await axios.get(imgUrl, {
-          responseType: 'arraybuffer',
-          timeout:      90000,
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (compatible; OLASUBOMI-MD/3.0)',
-            'Referer':    'https://pollinations.ai/'
-          }
-        });
+        const encoded = encodeURIComponent(prompt);
+        const imgUrl  = `https://image.pollinations.ai/prompt/${encoded}?model=flux&width=768&height=768&nologo=true`;
         await sock.sendMessage(jid, {
-          image:   Buffer.from(imgData),
+          image:   { url: imgUrl },
           caption: `🖼️ *Flux AI*\n\n_"${prompt}"_`
         });
       } catch (err) {
