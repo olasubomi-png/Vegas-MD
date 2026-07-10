@@ -601,8 +601,7 @@ const toolsCommands = {
           `~Strike~  : ~${text}~`
       });
     }
-  }
-};
+  },
 
   // ── Text-to-Speech (Google TTS — free, no key needed) ──
   tts: {
