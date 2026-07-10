@@ -4,9 +4,17 @@
 // from the Settings page (persisted to Mongo when available).
 const axios = require('axios');
 
+// Defensive: strip an accidentally-pasted "KEY=" prefix from an env value
+// (e.g. a secret saved as "DASHBOARD_API_KEY=abc123" instead of just "abc123").
+function stripKeyPrefix(name, value) {
+  if (!value) return value;
+  const prefix = `${name}=`;
+  return value.startsWith(prefix) ? value.slice(prefix.length) : value;
+}
+
 let config = {
   url: process.env.BOT_API_URL || 'http://localhost:8090',
-  apiKey: process.env.DASHBOARD_API_KEY || '',
+  apiKey: stripKeyPrefix('DASHBOARD_API_KEY', process.env.DASHBOARD_API_KEY) || '',
 };
 
 const changeListeners = [];

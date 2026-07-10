@@ -1,7 +1,15 @@
 const jwt = require('jsonwebtoken');
 
-const JWT_SECRET = process.env.JWT_SECRET;
-const ADMIN_PASSWORD = process.env.DASHBOARD_PASSWORD;
+// Defensive: strip an accidentally-pasted "KEY=" prefix from an env value
+// (e.g. a secret saved as "JWT_SECRET=abc123" instead of just "abc123").
+function stripKeyPrefix(name, value) {
+  if (!value) return value;
+  const prefix = `${name}=`;
+  return value.startsWith(prefix) ? value.slice(prefix.length) : value;
+}
+
+const JWT_SECRET = stripKeyPrefix('JWT_SECRET', process.env.JWT_SECRET);
+const ADMIN_PASSWORD = stripKeyPrefix('DASHBOARD_PASSWORD', process.env.DASHBOARD_PASSWORD);
 
 if (!JWT_SECRET || !ADMIN_PASSWORD) {
   throw new Error(
