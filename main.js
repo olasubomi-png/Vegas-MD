@@ -2,6 +2,7 @@
 require('dotenv').config();
 
 const fs = require('fs');
+const path = require('path');
 
 // ─── Single-instance lock ─────────────────────────────────────────────────────
 // Prevents two PM2 processes from running simultaneously and fighting over
@@ -158,6 +159,50 @@ const SILENT_LOGGER = {
   child() { return this; }
 };
 const db = require('./lib/database');
+const botState = require('./bot-api/state');
+
+// ── Mirror all console output into the dashboard's live-log buffer ─────────
+(function wireDashboardLogs() {
+  const origLog = console.log.bind(console);
+  const origErr = console.error.bind(console);
+  const origWarn = console.warn.bind(console);
+  console.log = (...args) => { botState.log('info', args.join(' ')); origLog(...args); };
+  console.error = (...args) => { botState.log('error', args.join(' ')); origErr(...args); };
+  console.warn = (...args) => { botState.log('warn', args.join(' ')); origWarn(...args); };
+})();
+
+// ── Start the internal dashboard API (same process, separate port) ─────────
+if (process.env.DASHBOARD_API_ENABLED !== 'false') {
+  try {
+    const { startBotApi } = require('./bot-api/server');
+    startBotApi({
+      port: parseInt(process.env.DASHBOARD_API_PORT || '8090', 10),
+      database: db,
+      getUsers: async () => Object.entries(db.data.users || {}).map(([id, u]) => ({ id, ...u })),
+      getGroups: async () => Object.entries(db.data.groups || {}).map(([id, g]) => ({ id, ...g })),
+      getPlugins: () => {
+        try {
+          return fs.readdirSync(path.join(__dirname, 'plugins')).filter(f => f.endsWith('.js'));
+        } catch { return []; }
+      },
+      broadcast: async (message, target) => {
+        if (!currentSock) throw new Error('bot not connected');
+        const jids = target === 'groups'
+          ? Object.keys(db.data.groups || {})
+          : Object.keys(db.data.users || {}).map(id => `${id}@s.whatsapp.net`);
+        let sent = 0;
+        for (const jid of jids) {
+          try { await currentSock.sendMessage(jid, { text: message }); sent++; } catch (_) {}
+        }
+        return { sent, total: jids.length };
+      },
+      restart: async () => { process.exit(0); },
+      setSetting: async (k, v) => db.setSetting?.(k, v),
+    });
+  } catch (err) {
+    console.error('[bot-api] failed to start:', err.message);
+  }
+}
 const { normalizeJid, getMessageText, resolveIsOwner } = require('./lib/helpers');
 const { handleParticipantUpdate } = require('./events/welcome');
 const {
@@ -464,6 +509,7 @@ function attachHandlers(sock, saveCreds) {
             try {
               const code = await sock.requestPairingCode(phoneNumber);
               console.log(`\n📱 PAIRING CODE: ${code}`);
+              botState.setConnection('pairing', { pairingCode: code });
               console.log('    WhatsApp → Settings → Linked Devices → Link a Device → Enter code above');
               console.log('    ⏳ Waiting for you to link. Do NOT restart the bot.\n');
             } catch (err) {
@@ -486,6 +532,7 @@ function attachHandlers(sock, saveCreds) {
                            ) || statusCode;
 
         console.log(`[WA] Connection closed — ${reasonName}(${statusCode}) | registered: ${registered}`);
+        botState.setConnection('close');
 
         // ── 440 connectionReplaced: always stop, regardless of state ────────
         // Another instance has taken over the session. Reconnecting would kick
@@ -665,6 +712,12 @@ function attachHandlers(sock, saveCreds) {
         console.log(`  List     : ${cmdNames.join(', ')}`);
         console.log('═'.repeat(52) + '\n');
 
+        botState.setSock(sock);
+        botState.prefix = botConfig.prefix;
+        botState.mode = botConfig.mode;
+        botState.botNumber = sock?.user?.id?.split(':')[0] || botState.botNumber;
+        botState.setConnection('open', { pairingCode: null });
+
         // ── Session backup — only on brand-new logins ──────────────
         if (_isNewLogin) {
           _isNewLogin = false;   // consume immediately — one-shot
@@ -681,6 +734,7 @@ function attachHandlers(sock, saveCreds) {
       const { messages, type } = events['messages.upsert'];
 
       console.log(`[WA] messages.upsert sock#${sockId} — type: ${type}, count: ${messages.length}`);
+      botState.bumpStat('messagesSeen', messages.length);
 
       // NOTE: do NOT `return` here — that would abort the entire process()
       // callback and skip messages.delete / group-participants.update that
@@ -958,6 +1012,7 @@ async function isGroupAdmin(jid, senderJid) {
 
 // ─── Command dispatcher ───────────────────────────────────
 async function handleCommand(command, args, message, sock, botConfig) {
+  botState.bumpStat('commandsRun');
   const jid       = message.key.remoteJid;
   const isGroup   = isJidGroup(jid);
   const sender    = message.key.participant || jid;
