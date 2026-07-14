@@ -343,9 +343,10 @@ const groupCommands = {
         }
 
         // ── Verify bot is an admin in the target group ─────────────
-        const normalise = id => id.replace(/:\d+@/, '@');
-        const botJid    = normalise(sock.user?.id || '');
-        const botInTgt  = tgtMeta.participants.find(p => normalise(p.id) === botJid);
+        // Compare by digits only so @s.whatsapp.net vs @c.us and :device suffix never cause false misses
+        const digitsOnly = id => (id || '').replace(/\D/g, '');
+        const botNum     = digitsOnly(sock.user?.id || '');
+        const botInTgt   = botNum ? tgtMeta.participants.find(p => digitsOnly(p.id) === botNum) : null;
         if (!botInTgt) {
           return sock.sendMessage(jid, {
             text: `❌ The bot is *not a member* of *${tgtMeta.subject}*.\nAdd the bot to that group first, then retry.`
@@ -358,7 +359,8 @@ const groupCommands = {
         }
 
         // ── Collect members not already in target ──────────────────
-        // Normalise JIDs (strip :device suffix) for accurate dedup
+        // Normalise JIDs (strip :device suffix + unify domain) for accurate dedup
+        const normalise = id => id.replace(/:\d+@/, '@').replace(/@c\.us$/, '@s.whatsapp.net');
         const tgtIds = new Set(tgtMeta.participants.map(p => normalise(p.id)));
         const toAdd  = srcMeta.participants
           .map(p => p.id)
