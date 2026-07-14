@@ -28,3 +28,14 @@ Fixed 2026-07-14: the "Blogger" AJAX server type's `n-bg` resolver (the *working
 **Why this matters:** any regex meant to pull a "file"/"source" URL out of a video-player page must not assume a file extension — CDN-signed streaming URLs (googlevideo.com, akamai, etc.) very often have none.
 
 **How to apply:** keep both extension-specific patterns (tried first, safest) and extension-agnostic fallback patterns (same JS/JSON shapes, any `http(s)://` value) in `extractPlayableUrlFromHtml`. After this fix, titles whose episode page lists a `Blogger` server (e.g. Demon Slayer, Jujutsu Kaisen) resolve correctly; titles with only dead `embed` hosts (awish.pro/dood.wf/alions.pro) or only the broken `hianime`/`histream` path (e.g. One Piece, Naruto Shippuuden as of 2026-07-14) still have no working server — that part remains a genuine site-side gap, not a code bug.
+
+## Confirmed 2026-07-14: the remaining failures are not scrapeable without a full headless-browser + anti-bot stack
+Checked each remaining dead path by hand — none is a regex/parsing gap:
+- `histream/play.php` on 9animetv.be returns **HTTP 500 unconditionally** (even with valid params) — dead on the provider's server, no client-side fix possible.
+- `awish.pro` embeds require passing a FingerprintJS device-fingerprint challenge before it'll redirect to the real player — needs real JS execution, not just following a redirect.
+- `dood.wf` 301s to `playmogo.com`, which sits behind a Cloudflare **managed JS challenge** (not a simple redirect) — requires solving an interactive browser challenge.
+- `alions.pro`'s redirect chain now dead-ends at `survey-smiles.com` (a spam/survey page) — the domain itself has been repurposed, there's no video to recover.
+- Checked for a healthier alternative source: `gogoanime.pe` is now a WordPress blog with no episode pages (search API returns articles, not player pages); `anitaku.to`, `gogoanimehd.io`, `9animetv.to`, `hianime.to`, `zoro.to`, `animepahe.*` don't resolve/timeout from this environment; `aniwatch.to`/`aniwave.to` are reachable but sit behind Cloudflare and use Megacloud-style encrypted sources that require periodically-reverse-engineered decryption keys to unwrap — a fundamentally different, ongoing-maintenance scraper project, not a fix.
+
+**Why this matters:** don't keep iterating on regex/redirect-following for these specific failures — they require either a stealth headless browser capable of clearing Cloudflare challenges (heavy, fragile, likely still blocked from server-side environments) or reverse-engineering a different site's video encryption (a recurring-maintenance project of its own). Treat "some episodes have no working source" as an accepted, inherent limit of the current single-mirror scraping approach, not a bug to keep chasing.
+
