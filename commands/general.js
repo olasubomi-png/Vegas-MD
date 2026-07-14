@@ -34,7 +34,7 @@ const generalCommands = {
   //   Both cases are now handled.
   vv: {
     category:    'owner',
-    desc:        'Reveal a view-once image or video (reply to it)',
+    desc:        'Reveal a view-once image, video, or voice note (reply to it)',
     usage:       '.vv',
     aliases:     ['viewonce', 'vv2', 'vv3'],
     permissions: 'all',
@@ -57,13 +57,17 @@ const generalCommands = {
         quoted.viewOnceMessageV2Extension?.message;
 
       // Step 3: in some Baileys v7 builds the wrapper is already stripped —
-      //         the inner imageMessage/videoMessage appears at the top level.
+      //         the inner imageMessage/videoMessage/audioMessage appears at
+      //         the top level. View-once voice notes/PTT go through
+      //         audioMessage (WhatsApp marks them via ctx.viewOnce / the
+      //         audioMessage's own viewOnce flag, not a separate wrapper type).
       const imgMsg   = voMsg?.imageMessage   || quoted.imageMessage;
       const videoMsg = voMsg?.videoMessage   || quoted.videoMessage;
+      const audioMsg = voMsg?.audioMessage   || quoted.audioMessage;
 
-      if (!imgMsg && !videoMsg) {
+      if (!imgMsg && !videoMsg && !audioMsg) {
         return sock.sendMessage(jid, {
-          text: `❌ The replied message doesn't contain a view-once image or video.\n\n_Make sure you are replying directly to the view-once message._`
+          text: `❌ The replied message doesn't contain a view-once image, video, or voice note.\n\n_Make sure you are replying directly to the view-once message._`
         });
       }
 
@@ -90,12 +94,19 @@ const generalCommands = {
             caption:  `👁️ *Revealed view-once image*`,
             mimetype: imgMsg.mimetype || 'image/jpeg'
           });
-        } else {
+        } else if (videoMsg) {
           const buffer = await downloadMediaMessage(fakeMsg, 'buffer', reuploaderCtx);
           await sock.sendMessage(jid, {
             video:    buffer,
             caption:  `👁️ *Revealed view-once video*`,
             mimetype: videoMsg.mimetype || 'video/mp4'
+          });
+        } else {
+          const buffer = await downloadMediaMessage(fakeMsg, 'buffer', reuploaderCtx);
+          await sock.sendMessage(jid, {
+            audio:    buffer,
+            mimetype: audioMsg.mimetype || 'audio/ogg; codecs=opus',
+            ptt:      true
           });
         }
       } catch (dlErr) {
