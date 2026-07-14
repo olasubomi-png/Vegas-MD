@@ -38,7 +38,7 @@ events/           WhatsApp event handlers
 | Admin      | 6  | Group moderation (warn, kick, promote) |
 | AI         | 17 | ChatGPT, Claude, Gemini, DeepSeek, ZST AI |
 | Audio      | 8  | Bass, robot, pitch, speed effects |
-| Downloader | 17 | TikTok, Instagram, YouTube, social |
+| Downloader | 18 | TikTok, Instagram, YouTube, social, anime (`.animedl`) |
 | Fun        | 22 | Jokes, quotes, facts, trivia, animals |
 | Games      | 4  | Trivia game, hangman, tic-tac-toe |
 | Group      | 20 | Welcome, antilink, tagall, settings |
@@ -54,6 +54,15 @@ events/           WhatsApp event handlers
 | **Sports** | 8  | EPL, La Liga, UCL, live matches, scores |
 | **Religion** | 6 | Bible, Quran, Hymns |
 | **Canvas** | 5  | ATM card, tweet, YouTube comment, chat |
+
+## Anime Episode Downloader (`.animedl`)
+`commands/download.js` scrapes the `gogoanime.by` mirror directly (title → series page → episode page → `megaplay.su` embed → direct `.mp4`). No official/legal API exists for full anime downloads, so this:
+- **Is fragile** — breaks whenever gogoanime.by changes markup/domain or megaplay.su changes its embed format.
+- **Carries legal/ToS risk** — it redistributes copyrighted content without authorization.
+- **Only works when the episode has an `embed`/`kiwi` player option.** Many older-library titles only expose an AJAX-encrypted player (e.g. `hianime`), which this does not resolve; the command replies with a manual watch link in that case instead of failing silently.
+
+## Dashboard (`dashboard/`)
+Two-step start: `npm install` in the repo root (server deps) **and** in `dashboard/client` (React client), then `npm run build` inside `dashboard/client` to produce `dashboard/client/dist` (the server serves this as static files; without it, `/` shows a "not built yet" placeholder). The `Dashboard` workflow runs `node dashboard/server/index.js`.
 
 ## Default Bot Prefix
 `.` (configurable via `.setprefix`)

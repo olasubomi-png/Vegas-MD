@@ -113,6 +113,84 @@ async function mediaFireDl(url) {
   return match[1];
 }
 
+// ── GogoAnime (gogoanime.by) — anime episode/movie scraper ─────────────────
+// NOTE: This scrapes a piracy mirror site directly (no official/legal API for
+// full anime episode downloads exists). It is inherently fragile — it will
+// break whenever the site changes its markup or domain — and carries legal
+// risk since it redistributes copyrighted content without authorization.
+const GOGO_BASE = 'https://gogoanime.by';
+const GOGO_UA   = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+async function gogoGet(url) {
+  const { data } = await axios.get(url, { headers: { 'User-Agent': GOGO_UA }, timeout: 20000 });
+  return data;
+}
+
+// Search gogoanime.by and return the best-matching series page slug + title.
+async function gogoSearchSeries(query) {
+  const html = await gogoGet(`${GOGO_BASE}/?s=${encodeURIComponent(query)}`);
+  const re = /<a href="https:\/\/gogoanime\.by\/series\/([a-z0-9-]+)\/"[^>]*title="([^"]+)"/g;
+  const matches = [];
+  let m;
+  while ((m = re.exec(html))) matches.push({ slug: m[1], title: m[2] });
+  if (!matches.length) return null;
+  // Dedupe by slug, prefer the first (most relevant) hit
+  return matches.find((v, i, arr) => arr.findIndex(x => x.slug === v.slug) === i);
+}
+
+// Given a series slug + episode number, find the actual episode page URL.
+async function gogoFindEpisodeUrl(slug, episodeNum) {
+  const html = await gogoGet(`${GOGO_BASE}/series/${slug}/`);
+  const re = new RegExp(
+    `href="(https:\\/\\/gogoanime\\.by\\/[a-z0-9-]*episode-${episodeNum}-[a-z-]*\\/?)"[^>]*>\\s*Episode\\s+${episodeNum}\\s*<`,
+    'i'
+  );
+  const m = html.match(re);
+  if (m) return m[1];
+  // Fallback: some entries omit the trailing "-subbed/-dubbed" text in the href capture above
+  const re2 = new RegExp(`href="(https:\\/\\/gogoanime\\.by\\/${slug}-episode-${episodeNum}-[a-z]+-[a-z]+)\\/?"`, 'i');
+  const m2 = html.match(re2);
+  return m2 ? m2[1] : null;
+}
+
+// Extract the direct playable/embed URL from an episode page (the "embed"
+// or "kiwi" player type ships a plain, unencrypted iframe URL).
+async function gogoExtractEmbedUrl(episodePageUrl) {
+  const html = await gogoGet(episodePageUrl);
+  const re = /data-type='(embed|kiwi)'[\s\S]{0,800}?data-plain-url='([^']+)'/;
+  const m = html.match(re);
+  return m ? m[2] : null;
+}
+
+// Resolve an embed page (e.g. megaplay.su/embed.php?sid=...) down to the
+// actual direct .mp4 (or .m3u8) source URL that the JW/HLS player loads.
+async function gogoExtractStreamUrl(embedUrl) {
+  const html = await gogoGet(embedUrl);
+  const m = html.match(/file:\s*["']([^"']+)["']/);
+  return m ? m[1] : null;
+}
+
+// Full pipeline: title + episode number → direct video URL + metadata.
+async function gogoDownloadEpisode(title, episodeNum) {
+  const series = await gogoSearchSeries(title);
+  if (!series) throw new Error(`No anime found matching "${title}"`);
+  const episodeUrl = await gogoFindEpisodeUrl(series.slug, episodeNum);
+  if (!episodeUrl) throw new Error(`Episode ${episodeNum} not found for "${series.title}"`);
+  const embedUrl = await gogoExtractEmbedUrl(episodeUrl);
+  if (!embedUrl) {
+    const err = new Error(`No auto-downloadable server for this episode. Watch it manually: ${episodeUrl}`);
+    err.episodeUrl = episodeUrl;
+    throw err;
+  }
+  const streamUrl = await gogoExtractStreamUrl(embedUrl);
+  if (!streamUrl) {
+    const err = new Error(`Could not resolve a direct video link. Watch it manually: ${episodeUrl}`);
+    err.episodeUrl = episodeUrl;
+    throw err;
+  }
+  return { title: series.title, episodeNum, episodeUrl, streamUrl };
+}
+
 // ── Spotify oEmbed info ────────────────────────────────────────────────────
 async function spotifyInfo(url) {
   const { data } = await axios.get(
@@ -467,6 +545,47 @@ const downloadCommands = {
         }
       } catch (err) {
         await sock.sendMessage(jid, { text: `❌ Spotify download failed: ${err.message}` });
+      }
+    }
+  },
+
+  // ── Anime (GogoAnime mirror) ──────────────────────────────
+  // ⚠️ Scrapes a piracy mirror (gogoanime.by) — no legal/official API exists
+  // for full anime episode downloads. Expect this to break if the site changes.
+  animedl: {
+    category: 'downloader', desc: 'Download a full anime episode (via GogoAnime)',
+    usage: '.animedl <anime title> | <episode number>', aliases: ['anime', 'animedownload'], permissions: 'all',
+    examples: ['.animedl Naruto Shippuuden | 1', '.animedl One Piece | 1085'],
+    exec: async (args, sock, jid) => {
+      const raw = args.join(' ').trim();
+      if (!raw || !raw.includes('|')) {
+        return sock.sendMessage(jid, {
+          text: `🎌 *Anime Downloader*\n\nUsage: *.animedl <anime title> | <episode number>*\n\nExample:\n.animedl Naruto Shippuuden | 1\n\n_Movies: use episode 1._`
+        });
+      }
+      const [titlePart, epPart] = raw.split('|').map(s => s.trim());
+      const episodeNum = parseInt(epPart, 10);
+      if (!titlePart || !episodeNum || episodeNum < 1) {
+        return sock.sendMessage(jid, { text: `❌ Usage: .animedl <anime title> | <episode number>` });
+      }
+      await sock.sendMessage(jid, { text: `🎌 Searching *${titlePart}* — Episode ${episodeNum}...` });
+      try {
+        const result = await gogoDownloadEpisode(titlePart, episodeNum);
+        const caption = `🎌 *${result.title}*\n📺 Episode ${result.episodeNum}\n\n_Source: gogoanime mirror — unofficial._`;
+        await sock.sendMessage(jid, { text: `✅ Found! Sending video...\n\n${caption}` });
+        try {
+          // Stream directly from the source rather than buffering the whole
+          // file in memory — anime episodes can be large.
+          await sock.sendMessage(jid, { video: { url: result.streamUrl }, caption, mimetype: 'video/mp4' });
+        } catch (sendErr) {
+          // Fallback: hand back the direct link if Baileys can't stream it
+          // (e.g. .m3u8 source, or the CDN rejects the fetch).
+          await sock.sendMessage(jid, {
+            text: `⚠️ Could not attach the video directly (${sendErr.message}).\n\n📎 *Direct link:*\n${result.streamUrl}\n\n_Open this link in a browser or VLC to watch/download._`
+          });
+        }
+      } catch (err) {
+        await sock.sendMessage(jid, { text: `❌ Anime download failed: ${err.message}` });
       }
     }
   },
