@@ -123,8 +123,26 @@ async function spotifyInfo(url) {
 }
 
 // ── Generic send helpers ───────────────────────────────────────────────────
+
+// Download video to a buffer first, then send — avoids Baileys' internal
+// fetch failing on CDN URLs that have expiring signatures (e.g. TikTok).
 async function sendVideoFromUrl(sock, jid, videoUrl, caption) {
-  await sock.sendMessage(jid, { video: { url: videoUrl }, caption, mimetype: 'video/mp4' });
+  let buf;
+  try {
+    const { data } = await axios.get(videoUrl, {
+      responseType: 'arraybuffer',
+      timeout: 60000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+        'Referer': 'https://www.tiktok.com/'
+      }
+    });
+    buf = Buffer.from(data);
+  } catch (_) {
+    // Fall back to letting Baileys download if our fetch fails
+    return sock.sendMessage(jid, { video: { url: videoUrl }, caption, mimetype: 'video/mp4' });
+  }
+  await sock.sendMessage(jid, { video: buf, caption, mimetype: 'video/mp4' });
 }
 
 async function sendAudioFromUrl(sock, jid, audioUrl, caption) {

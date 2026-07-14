@@ -198,14 +198,16 @@ const aiCommands = {
       try {
         const encoded = encodeURIComponent(prompt);
         const seed    = Math.floor(Math.random() * 999999);
-        const imgUrl  = `https://image.pollinations.ai/prompt/${encoded}?model=${model}&width=1024&height=1024&nologo=true&enhance=true&seed=${seed}`;
+        // Use 512×512 — faster than 1024×1024, well within Baileys' image limit,
+        // and still high quality for WhatsApp display.
+        const imgUrl  = `https://image.pollinations.ai/prompt/${encoded}?model=${model}&width=512&height=512&nologo=true&seed=${seed}`;
 
-        // Download buffer on the server with full browser headers.
+        // Download buffer server-side with browser headers.
         // Passing { url } directly to Baileys fails because Baileys' internal
-        // fetch is blocked by Cloudflare on AWS EC2 IPs.
-        const { data: imgData } = await axios.get(imgUrl, {
+        // fetch is blocked by Cloudflare on some server IPs.
+        const resp = await axios.get(imgUrl, {
           responseType: 'arraybuffer',
-          timeout:      90000,
+          timeout:      60000,
           headers: {
             'User-Agent':      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Referer':         'https://pollinations.ai/',
@@ -214,8 +216,15 @@ const aiCommands = {
           }
         });
 
+        // Guard: if pollinations returned an HTML error page instead of an image,
+        // the content-type will be text/* — catch it early with a clear message.
+        const ct = resp.headers['content-type'] || '';
+        if (!ct.startsWith('image/')) {
+          throw new Error(`Image service returned non-image response (${ct || 'unknown type'}). Try again.`);
+        }
+
         await sock.sendMessage(jid, {
-          image:   Buffer.from(imgData),
+          image:   Buffer.from(resp.data),
           caption: `${modeLabel} *Imagine AI*\n\n_"${prompt}"_`
         });
       } catch (err) {
@@ -233,9 +242,22 @@ const aiCommands = {
       await sock.sendMessage(jid, { text: `🖼️ *Flux AI* generating...\n\n_"${prompt}"_` });
       try {
         const encoded = encodeURIComponent(prompt);
-        const imgUrl  = `https://image.pollinations.ai/prompt/${encoded}?model=flux&width=768&height=768&nologo=true`;
+        const seed    = Math.floor(Math.random() * 999999);
+        const imgUrl  = `https://image.pollinations.ai/prompt/${encoded}?model=flux&width=512&height=512&nologo=true&seed=${seed}`;
+        // Download server-side — passing { url } directly to Baileys is blocked on some IPs
+        const resp = await axios.get(imgUrl, {
+          responseType: 'arraybuffer',
+          timeout: 60000,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': 'https://pollinations.ai/',
+            'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8'
+          }
+        });
+        const ct = resp.headers['content-type'] || '';
+        if (!ct.startsWith('image/')) throw new Error(`Service returned non-image response. Try again.`);
         await sock.sendMessage(jid, {
-          image:   { url: imgUrl },
+          image:   Buffer.from(resp.data),
           caption: `🖼️ *Flux AI*\n\n_"${prompt}"_`
         });
       } catch (err) {

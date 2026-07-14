@@ -288,6 +288,83 @@ const groupCommands = {
     }
   },
 
+  addall: {
+    category: 'group', desc: 'Add all members from this group to another group in the same community',
+    usage: '.addall <target-group-JID>', aliases: [], permissions: 'admin',
+    examples: ['.addall 1234567890-1234567890@g.us'],
+    exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
+      if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
+      const rawTarget = (args[0] || '').trim();
+      if (!rawTarget) {
+        return sock.sendMessage(jid, {
+          text:
+            `➕ *Add All (Community)*\n\n` +
+            `Adds every member of *this* group to another group that shares the same community.\n\n` +
+            `Usage: *.addall <target-group-JID>*\n` +
+            `Example: *.addall 12345678901234-1234567890@g.us*\n\n` +
+            `_Use .ginfo in the target group to get its JID._`
+        });
+      }
+      const targetJid = rawTarget.includes('@g.us') ? rawTarget : `${rawTarget}@g.us`;
+      if (targetJid === jid) {
+        return sock.sendMessage(jid, { text: '❌ Target group cannot be the same as this group.' });
+      }
+      try {
+        await sock.sendMessage(jid, { text: `🔍 Checking community membership...` });
+        const [srcMeta, tgtMeta] = await Promise.all([
+          sock.groupMetadata(jid),
+          sock.groupMetadata(targetJid).catch(() => null)
+        ]);
+        if (!tgtMeta) {
+          return sock.sendMessage(jid, { text: `❌ Cannot access the target group. Make sure the bot is a member there.\n\nJID: ${targetJid}` });
+        }
+        // Verify both groups belong to the same community (linkedParent)
+        const srcCommunity = srcMeta.linkedParent;
+        const tgtCommunity = tgtMeta.linkedParent;
+        if (!srcCommunity || !tgtCommunity || srcCommunity !== tgtCommunity) {
+          return sock.sendMessage(jid, {
+            text:
+              `❌ Both groups must be in the *same community*.\n\n` +
+              `This group's community : ${srcCommunity || 'none'}\n` +
+              `Target group's community: ${tgtCommunity || 'none'}`
+          });
+        }
+        // Collect members not already in target group
+        const tgtIds = new Set(tgtMeta.participants.map(p => p.id));
+        const toAdd  = srcMeta.participants.map(p => p.id).filter(id => !tgtIds.has(id));
+        if (!toAdd.length) {
+          return sock.sendMessage(jid, { text: `✅ All ${srcMeta.participants.length} members are already in *${tgtMeta.subject}*.` });
+        }
+        await sock.sendMessage(jid, {
+          text: `➕ Adding *${toAdd.length}* member(s) to *${tgtMeta.subject}*...\n_(Already there: ${tgtIds.size})_`
+        });
+        // Add in batches of 5 — WhatsApp's per-request add limit
+        let added = 0, failed = 0;
+        for (let i = 0; i < toAdd.length; i += 5) {
+          const batch = toAdd.slice(i, i + 5);
+          try {
+            await sock.groupParticipantsUpdate(targetJid, batch, 'add');
+            added += batch.length;
+          } catch (_) {
+            failed += batch.length;
+          }
+          // Small delay to avoid hitting WhatsApp rate limits
+          if (i + 5 < toAdd.length) await new Promise(r => setTimeout(r, 1500));
+        }
+        await sock.sendMessage(jid, {
+          text:
+            `✅ *Add All Complete!*\n\n` +
+            `📍 Target group : *${tgtMeta.subject}*\n` +
+            `➕ Added        : ${added}\n` +
+            `❌ Failed       : ${failed}\n` +
+            `⏩ Already there: ${tgtIds.size}`
+        });
+      } catch (err) {
+        await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
+      }
+    }
+  },
+
   // ─── Simple toggles ───────────────────────────────────────
   welcome:      makeToggle('welcome',     'Welcome messages', '👋'),
   goodbye:      makeToggle('goodbye',     'Goodbye messages', '🚪'),
