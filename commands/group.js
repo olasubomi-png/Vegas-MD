@@ -337,23 +337,32 @@ const groupCommands = {
           return sock.sendMessage(jid, {
             text:
               `❌ Cannot access the target group.\n\n` +
-              `Make sure the bot is a *member or admin* of that group.\n` +
-              `JID: ${targetJid}`
+              `Make sure the bot is a *member and admin* of that group before using this command.\n` +
+              `JID tried: ${targetJid}`
           });
         }
 
-        // ── Optional community check — warn but don't block ────────
-        const srcCommunity = srcMeta.linkedParent;
-        const tgtCommunity = tgtMeta.linkedParent;
-        if (srcCommunity && tgtCommunity && srcCommunity !== tgtCommunity) {
-          await sock.sendMessage(jid, {
-            text: `⚠️ Note: these groups are in *different communities*. Proceeding anyway...`
+        // ── Verify bot is an admin in the target group ─────────────
+        const normalise = id => id.replace(/:\d+@/, '@');
+        const botJid    = normalise(sock.user?.id || '');
+        const botInTgt  = tgtMeta.participants.find(p => normalise(p.id) === botJid);
+        if (!botInTgt) {
+          return sock.sendMessage(jid, {
+            text: `❌ The bot is *not a member* of *${tgtMeta.subject}*.\nAdd the bot to that group first, then retry.`
+          });
+        }
+        if (!botInTgt.admin) {
+          return sock.sendMessage(jid, {
+            text: `❌ The bot is not an *admin* in *${tgtMeta.subject}*.\nPromote the bot there first, then retry.`
           });
         }
 
         // ── Collect members not already in target ──────────────────
-        const tgtIds = new Set(tgtMeta.participants.map(p => p.id));
-        const toAdd  = srcMeta.participants.map(p => p.id).filter(id => !tgtIds.has(id));
+        // Normalise JIDs (strip :device suffix) for accurate dedup
+        const tgtIds = new Set(tgtMeta.participants.map(p => normalise(p.id)));
+        const toAdd  = srcMeta.participants
+          .map(p => p.id)
+          .filter(id => !tgtIds.has(normalise(id)));
 
         if (!toAdd.length) {
           return sock.sendMessage(jid, {
@@ -364,30 +373,45 @@ const groupCommands = {
         await sock.sendMessage(jid, {
           text:
             `➕ Adding *${toAdd.length}* member(s) to *${tgtMeta.subject}*...\n` +
-            `_(Already there: ${tgtIds.size})_`
+            `_(Already there: ${tgtIds.size} | Bot: admin ✅)_`
         });
 
-        // ── Add in batches of 5 (WhatsApp rate limit) ──────────────
-        let added = 0, failed = 0;
+        // ── Add in batches of 5, inspect per-participant result codes ──
+        // Baileys groupParticipantsUpdate returns [{ status, jid }] where:
+        //   '200' = added  |  '403' = privacy block  |  '408' = not on WA
+        //   '409' = already member  |  '500' = server error
+        let added = 0, privacy = 0, notOnWa = 0, alreadyIn = 0, errored = 0;
+
         for (let i = 0; i < toAdd.length; i += 5) {
           const batch = toAdd.slice(i, i + 5);
           try {
-            await sock.groupParticipantsUpdate(targetJid, batch, 'add');
-            added += batch.length;
-          } catch (_) {
-            failed += batch.length;
+            const results = await sock.groupParticipantsUpdate(targetJid, batch, 'add');
+            for (const r of (results || [])) {
+              const code = String(r.status);
+              if      (code === '200') added++;
+              else if (code === '403') privacy++;
+              else if (code === '408') notOnWa++;
+              else if (code === '409') alreadyIn++;
+              else                     errored++;
+            }
+            // Guard: if Baileys returned fewer entries than sent, count the gap
+            const gap = batch.length - (results?.length ?? 0);
+            if (gap > 0) errored += gap;
+          } catch (batchErr) {
+            console.error('[addall] batch error:', batchErr.message);
+            errored += batch.length;
           }
           if (i + 5 < toAdd.length) await new Promise(r => setTimeout(r, 1500));
         }
 
-        await sock.sendMessage(jid, {
-          text:
-            `✅ *Add All Complete!*\n\n` +
-            `📍 Target group  : *${tgtMeta.subject}*\n` +
-            `➕ Added         : ${added}\n` +
-            `❌ Failed        : ${failed}\n` +
-            `⏩ Already there : ${tgtIds.size}`
-        });
+        const lines = [`✅ *Add All Complete!*\n`, `📍 Target  : *${tgtMeta.subject}*`, `➕ Added   : ${added}`];
+        if (alreadyIn) lines.push(`⏩ Already in group  : ${alreadyIn}`);
+        if (privacy)   lines.push(`🔒 Privacy blocked   : ${privacy} _(user must allow group adds)_`);
+        if (notOnWa)   lines.push(`📵 Not on WhatsApp   : ${notOnWa}`);
+        if (errored)   lines.push(`❌ Other errors      : ${errored}`);
+
+        await sock.sendMessage(jid, { text: lines.join('\n') });
+
       } catch (err) {
         await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
       }
