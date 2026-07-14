@@ -56,10 +56,14 @@ events/           WhatsApp event handlers
 | **Canvas** | 5  | ATM card, tweet, YouTube comment, chat |
 
 ## Anime Episode Downloader (`.animedl`)
-`commands/download.js` scrapes the `gogoanime.by` mirror directly (title → series page → episode page → `megaplay.su` embed → direct `.mp4`). No official/legal API exists for full anime downloads, so this:
-- **Is fragile** — breaks whenever gogoanime.by changes markup/domain or megaplay.su changes its embed format.
+`commands/download.js` scrapes the `gogoanime.by` mirror directly (title → series page → episode page → direct video URL). No official/legal API exists for full anime downloads, so this:
+- **Is fragile** — breaks whenever gogoanime.by changes markup/domain, or its upstream video providers change their embed/AJAX format.
 - **Carries legal/ToS risk** — it redistributes copyrighted content without authorization.
-- **Only works when the episode has an `embed`/`kiwi` player option.** Many older-library titles only expose an AJAX-encrypted player (e.g. `hianime`), which this does not resolve; the command replies with a manual watch link in that case instead of failing silently.
+- **Tries every server listed on the episode page, in order:**
+  1. `embed`/`kiwi` — ship a plain unencrypted iframe URL → resolved in one hop (`megaplay.su` → direct `.mp4`).
+  2. AJAX-based servers (e.g. `Blogger`) — resolved by replaying the encrypted params through `9animetv.be`'s `player.php`; when it forwards to the `n-bg` resolver this yields a real `googlevideo.com` direct link.
+  3. `hianime` and any other server whose AJAX response routes through `9animetv.be`'s `histream/play.php` is skipped — that specific resolver is broken on the provider's own server (always HTTP 500, even on garbage input), not something fixable client-side.
+- If no server resolves, the command replies with a manual watch link instead of failing silently. Titles gogoanime.by doesn't host at all (it falls back to an "external results" search widget for those) correctly report "no anime found".
 
 ## Dashboard (`dashboard/`)
 Two-step start: `npm install` in the repo root (server deps) **and** in `dashboard/client` (React client), then `npm run build` inside `dashboard/client` to produce `dashboard/client/dist` (the server serves this as static files; without it, `/` shows a "not built yet" placeholder). The `Dashboard` workflow runs `node dashboard/server/index.js`.

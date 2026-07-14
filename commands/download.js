@@ -153,15 +153,6 @@ async function gogoFindEpisodeUrl(slug, episodeNum) {
   return m2 ? m2[1] : null;
 }
 
-// Extract the direct playable/embed URL from an episode page (the "embed"
-// or "kiwi" player type ships a plain, unencrypted iframe URL).
-async function gogoExtractEmbedUrl(episodePageUrl) {
-  const html = await gogoGet(episodePageUrl);
-  const re = /data-type='(embed|kiwi)'[\s\S]{0,800}?data-plain-url='([^']+)'/;
-  const m = html.match(re);
-  return m ? m[2] : null;
-}
-
 // Resolve an embed page (e.g. megaplay.su/embed.php?sid=...) down to the
 // actual direct .mp4 (or .m3u8) source URL that the JW/HLS player loads.
 async function gogoExtractStreamUrl(embedUrl) {
@@ -170,21 +161,95 @@ async function gogoExtractStreamUrl(embedUrl) {
   return m ? m[1] : null;
 }
 
+// Parse every server option ("player-type-link") listed on an episode page,
+// regardless of attribute order in the markup.
+function gogoParseServerBlocks(html) {
+  const blocks = html.split(/<li class='player-type-link/).slice(1);
+  return blocks.map(block => {
+    const attr = name => {
+      const m = block.match(new RegExp(`data-${name}='([^']*)'`));
+      return m ? m[1] : '';
+    };
+    return {
+      type: attr('type'),
+      enc1: attr('encrypted-url1'),
+      enc2: attr('encrypted-url2'),
+      enc3: attr('encrypted-url3'),
+      plainUrl: attr('plain-url'),
+    };
+  }).filter(b => b.type);
+}
+
+// Some server types (e.g. "Blogger") aren't a plain URL — the page's own
+// client-side JS resolves them via an AJAX call to 9animetv.be's player.php,
+// which forwards the encrypted blob and returns an iframe. That iframe
+// sometimes points at a working resolver ("n-bg/player.php", which returns a
+// real googlevideo.com direct link) and sometimes at "histream/play.php",
+// which is broken on the provider's own server (always 500s, even on
+// garbage input) — those are skipped rather than retried.
+async function gogoResolveAjaxServer(server, featureImage, postId) {
+  const params = {
+    [server.type]: server.enc1,
+    url2: server.enc2,
+    url3: server.enc3,
+    feature_image: featureImage,
+    user_agent: GOGO_UA,
+    ref: 'gogoanime.by',
+    postId,
+  };
+  const { data: playerHtml } = await axios.get(
+    'https://9animetv.be/wp-content/plugins/video-player/includes/player/player.php',
+    { params, timeout: 20000, headers: { Referer: `${GOGO_BASE}/` } }
+  );
+  const iframeMatch = (playerHtml + '').match(/<iframe src="([^"]+)"/);
+  if (!iframeMatch) return null;
+  const iframeSrc = iframeMatch[1].replace(/&amp;/g, '&');
+  if (iframeSrc.includes('/histream/')) return null; // known-broken resolver
+  const { data: resolvedHtml } = await axios.get(iframeSrc, {
+    timeout: 20000, headers: { Referer: 'https://9animetv.be/', 'User-Agent': GOGO_UA }
+  });
+  const html = resolvedHtml + '';
+  const fileMatch = html.match(/"file"\s*:\s*"([^"]+)"/) || html.match(/file:\s*["']([^"']+)["']/);
+  return fileMatch ? fileMatch[1] : null;
+}
+
+// Try every server listed on an episode page until one yields a real
+// direct video URL. Fast path first (embed/kiwi ship a plain iframe URL
+// that resolves in one hop); AJAX-based servers (e.g. Blogger) are tried
+// after, since they cost an extra network round-trip per attempt.
+async function gogoResolvePlayableUrl(episodePageUrl) {
+  const html = await gogoGet(episodePageUrl);
+  const servers = gogoParseServerBlocks(html);
+
+  const direct = servers.filter(s => (s.type === 'embed' || s.type === 'kiwi') && s.plainUrl);
+  for (const s of direct) {
+    const streamUrl = await gogoExtractStreamUrl(s.plainUrl).catch(() => null);
+    if (streamUrl) return streamUrl;
+  }
+
+  const featureMatch = html.match(/loadPlayer\(\s*type,\s*enc1,\s*enc2,\s*enc3,\s*"([^"]+)"/);
+  const postIdMatch = html.match(/"(\d+)",\s*plainUrl\s*\)/);
+  if (!featureMatch || !postIdMatch) return null;
+  const featureImage = featureMatch[1];
+  const postId = postIdMatch[1];
+
+  const ajaxServers = servers.filter(s => s.type !== 'embed' && s.type !== 'kiwi' && s.enc1);
+  for (const s of ajaxServers) {
+    const streamUrl = await gogoResolveAjaxServer(s, featureImage, postId).catch(() => null);
+    if (streamUrl) return streamUrl;
+  }
+  return null;
+}
+
 // Full pipeline: title + episode number → direct video URL + metadata.
 async function gogoDownloadEpisode(title, episodeNum) {
   const series = await gogoSearchSeries(title);
   if (!series) throw new Error(`No anime found matching "${title}"`);
   const episodeUrl = await gogoFindEpisodeUrl(series.slug, episodeNum);
   if (!episodeUrl) throw new Error(`Episode ${episodeNum} not found for "${series.title}"`);
-  const embedUrl = await gogoExtractEmbedUrl(episodeUrl);
-  if (!embedUrl) {
-    const err = new Error(`No auto-downloadable server for this episode. Watch it manually: ${episodeUrl}`);
-    err.episodeUrl = episodeUrl;
-    throw err;
-  }
-  const streamUrl = await gogoExtractStreamUrl(embedUrl);
+  const streamUrl = await gogoResolvePlayableUrl(episodeUrl);
   if (!streamUrl) {
-    const err = new Error(`Could not resolve a direct video link. Watch it manually: ${episodeUrl}`);
+    const err = new Error(`No auto-downloadable server for this episode. Watch it manually: ${episodeUrl}`);
     err.episodeUrl = episodeUrl;
     throw err;
   }
