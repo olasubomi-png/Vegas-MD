@@ -203,12 +203,14 @@ async function gogoResolveAjaxServer(server, featureImage, postId) {
   );
   const iframeMatch = (playerHtml + '').match(/<iframe src="([^"]+)"/);
   if (!iframeMatch) return null;
-  const iframeSrc = iframeMatch[1].replace(/&amp;/g, '&');
+  let iframeSrc = iframeMatch[1].replace(/&amp;/g, '&');
+  if (iframeSrc.startsWith('/')) iframeSrc = 'https://9animetv.be' + iframeSrc; // some resolvers (e.g. gogo-stream) return a relative path
   if (iframeSrc.includes('/histream/')) return null; // known-broken resolver
   const { data: resolvedHtml } = await axios.get(iframeSrc, {
     timeout: 20000, headers: { Referer: 'https://9animetv.be/', 'User-Agent': GOGO_UA }
   });
   const html = resolvedHtml + '';
+  if (/no available video source/i.test(html)) return null; // resolver has nothing for this episode
   const fileMatch = html.match(/"file"\s*:\s*"([^"]+)"/) || html.match(/file:\s*["']([^"']+)["']/);
   return fileMatch ? fileMatch[1] : null;
 }
