@@ -333,6 +333,199 @@ async function gogoDownloadEpisode(title, episodeNum) {
   return { title: series.title, episodeNum, episodeUrl, streamUrl };
 }
 
+// ── Stream URL classification & delivery (used by .animedl) ────────────────
+//
+// gogoResolvePlayableUrl() can hand back several fundamentally different
+// kinds of URL depending on which server the episode used, and each needs a
+// different delivery strategy:
+//   - "mp4"        a real file URL ending in .mp4 — safe to download & send.
+//   - "hls"        an .m3u8 playlist (segmented video) — WhatsApp/Baileys
+//                  cannot attach this directly; it must be remuxed to a
+//                  single .mp4 file first (ffmpeg), or rejected with a clear
+//                  reason if that's not possible.
+//   - "google-cdn" a googlevideo.com "videoplayback" URL — no file
+//                  extension, format lives in a "mime="/"itag=" query param,
+//                  and the link is short-lived (has an "expire=" timestamp).
+//                  These are ordinary MP4/WebM bytes once fetched, but must
+//                  never be handed to the user as a raw link since they will
+//                  be expired by the time they click it.
+//   - "unknown"    anything else — refuse rather than guess.
+const ANIME_LOG_PREFIX = '[animedl]';
+
+function classifyStreamUrl(url) {
+  let parsed;
+  try { parsed = new URL(url); } catch { return { kind: 'invalid', reason: 'not a valid URL' }; }
+  if (!/^https?:$/.test(parsed.protocol)) return { kind: 'invalid', reason: `unsupported protocol "${parsed.protocol}"` };
+
+  const isTemporary = /(^|\.)googlevideo\.com$/i.test(parsed.hostname) || parsed.searchParams.has('expire');
+  if (/\.m3u8(\?|$)/i.test(parsed.pathname) || parsed.searchParams.get('m') === 'm3u8') {
+    return { kind: 'hls', isTemporary };
+  }
+  if (/\.mp4(\?|$)/i.test(parsed.pathname)) {
+    return { kind: 'mp4', isTemporary };
+  }
+  if (/(^|\.)googlevideo\.com$/i.test(parsed.hostname)) {
+    // "mime=video%2Fmp4" (or similar) query param identifies the real
+    // format on these extension-less CDN links.
+    const mime = parsed.searchParams.get('mime') || '';
+    if (/^video\//i.test(mime) || mime === '') {
+      return { kind: 'google-cdn', isTemporary: true, mime: mime || 'video/mp4' };
+    }
+    return { kind: 'unsupported', isTemporary: true, reason: `googlevideo link advertises non-video mime "${mime}"` };
+  }
+  return { kind: 'unknown', isTemporary };
+}
+
+// Generic retry wrapper with exponential backoff for transient network
+// failures (timeouts, connection resets, 5xx). 4xx errors (bad URL, 403,
+// 404 — expired links) are not retried since retrying can't fix them.
+async function withRetry(fn, { retries = 3, baseDelayMs = 1000, label = 'operation' } = {}) {
+  let lastErr;
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await fn(attempt);
+    } catch (err) {
+      lastErr = err;
+      const status = err.response?.status;
+      const retryable = !status || status >= 500 || ['ECONNRESET', 'ETIMEDOUT', 'ECONNABORTED', 'EAI_AGAIN'].includes(err.code);
+      console.error(`${ANIME_LOG_PREFIX} ${label} attempt ${attempt}/${retries} failed: ${err.code || status || ''} ${err.message}`);
+      if (!retryable || attempt === retries) break;
+      const delay = baseDelayMs * 2 ** (attempt - 1);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+  throw lastErr;
+}
+
+const ANIME_STREAM_HEADERS = {
+  'User-Agent': GOGO_UA,
+  'Referer': 'https://9animetv.be/',
+};
+
+// HEAD-probe a stream URL (falling back to a ranged GET, since some CDNs
+// reject HEAD) to confirm it is actually reachable and get its real
+// content-type/content-length before we commit to downloading it.
+async function probeStreamUrl(url) {
+  return withRetry(async () => {
+    try {
+      const res = await axios.head(url, { headers: ANIME_STREAM_HEADERS, timeout: 15000, maxRedirects: 5 });
+      return { status: res.status, contentType: res.headers['content-type'] || '', contentLength: Number(res.headers['content-length']) || null };
+    } catch (err) {
+      if (err.response) throw err; // real HTTP error — surface it, not retryable-network
+      // Some CDNs (megacloud/googlevideo variants) reject HEAD outright — retry with a tiny ranged GET.
+      const res = await axios.get(url, { headers: { ...ANIME_STREAM_HEADERS, Range: 'bytes=0-0' }, timeout: 15000, maxRedirects: 5, responseType: 'arraybuffer' });
+      const total = res.headers['content-range'] ? Number(res.headers['content-range'].split('/')[1]) : (Number(res.headers['content-length']) || null);
+      return { status: res.status, contentType: res.headers['content-type'] || '', contentLength: total };
+    }
+  }, { label: 'probe stream URL' });
+}
+
+// WhatsApp reliably rejects large inline video attachments; keep this in
+// line with the cap already used for yt-dlp downloads elsewhere in this file.
+const MAX_ANIME_VIDEO_BYTES = 90 * 1024 * 1024; // 90MB
+
+function formatBytes(n) {
+  if (!n) return 'unknown size';
+  return `${(n / (1024 * 1024)).toFixed(1)}MB`;
+}
+
+// Download a direct (mp4 or google-cdn) URL into a buffer with retry/backoff,
+// then hand the raw bytes to Baileys — this avoids Baileys' own internal
+// fetch, which lacks the Referer/User-Agent these CDNs require and is what
+// caused the original "falls back to sending the raw link" bug.
+// 90MB at even a slow/throttled ~150KB/s connection takes ~10 minutes, so
+// this timeout is generous on purpose — it bounds total transfer time, not
+// per-chunk stall time, and existing-attempt bytes are discarded on retry.
+const ANIME_DOWNLOAD_TIMEOUT_MS = 8 * 60 * 1000;
+
+async function downloadStreamBuffer(url) {
+  const res = await withRetry(
+    () => axios.get(url, { headers: ANIME_STREAM_HEADERS, timeout: ANIME_DOWNLOAD_TIMEOUT_MS, responseType: 'arraybuffer', maxContentLength: MAX_ANIME_VIDEO_BYTES + 1024 * 1024, maxBodyLength: MAX_ANIME_VIDEO_BYTES + 1024 * 1024 }),
+    { retries: 3, baseDelayMs: 1500, label: 'download stream' }
+  );
+  return Buffer.from(res.data);
+}
+
+// Remux an HLS (.m3u8) stream into a single playable .mp4 file via ffmpeg.
+// "-c copy" avoids re-encoding (fast, no quality loss) — it only works if
+// the segments are already H.264/AAC, which is true for effectively every
+// anime-mirror HLS stream; if the copy remux fails we do not attempt a slow
+// full re-encode, since that would be too slow for a chat command.
+async function ffmpegAvailable() {
+  try { await execFileAsync('ffmpeg', ['-version']); return true; } catch { return false; }
+}
+
+async function remuxHlsToMp4(m3u8Url) {
+  const outPath = tmpFile('.mp4');
+  const headerArg = `Referer: ${ANIME_STREAM_HEADERS.Referer}\r\nUser-Agent: ${ANIME_STREAM_HEADERS['User-Agent']}\r\n`;
+  await execFileAsync('ffmpeg', [
+    '-headers', headerArg,
+    '-i', m3u8Url,
+    '-c', 'copy',
+    '-bsf:a', 'aac_adtstoasc',
+    '-movflags', '+faststart',
+    '-y', outPath,
+  ], { timeout: 180000, maxBuffer: 20 * 1024 * 1024 });
+  if (!fs.existsSync(outPath) || fs.statSync(outPath).size === 0) {
+    throw new Error('ffmpeg produced an empty file');
+  }
+  return outPath;
+}
+
+// End-to-end: classify + validate + fetch a resolved stream URL into
+// something Baileys can send, or throw a precise, user-facing reason why it
+// can't be. Never returns/propagates the raw temporary URL to the caller.
+async function prepareAnimeVideoForSend(streamUrl, { onLargeFile } = {}) {
+  const info = classifyStreamUrl(streamUrl);
+  console.log(`${ANIME_LOG_PREFIX} classified stream URL as "${info.kind}"${info.isTemporary ? ' (temporary)' : ''}`);
+
+  if (info.kind === 'invalid') throw new Error(`Resolved link is not usable (${info.reason}).`);
+  if (info.kind === 'unsupported') throw new Error(`Resolved link is not a supported video format (${info.reason}).`);
+  if (info.kind === 'unknown') throw new Error('Resolved link is in a format this bot cannot verify or attach safely.');
+
+  if (info.kind === 'hls') {
+    if (!(await ffmpegAvailable())) {
+      throw new Error('This episode is only available as an HLS (.m3u8) stream, and no video converter is installed on the server to convert it — it cannot be attached.');
+    }
+    console.log(`${ANIME_LOG_PREFIX} remuxing HLS stream to mp4 via ffmpeg`);
+    let filePath;
+    try {
+      filePath = await withRetry(() => remuxHlsToMp4(streamUrl), { retries: 2, baseDelayMs: 2000, label: 'ffmpeg HLS remux' });
+      const { size } = fs.statSync(filePath);
+      if (size > MAX_ANIME_VIDEO_BYTES) {
+        throw new Error(`The converted video is too large to send over WhatsApp (${formatBytes(size)}, limit ${formatBytes(MAX_ANIME_VIDEO_BYTES)}).`);
+      }
+      const buffer = fs.readFileSync(filePath);
+      return { buffer };
+    } finally {
+      if (filePath) { try { fs.unlinkSync(filePath); } catch {} }
+    }
+  }
+
+  // mp4 / google-cdn: validate reachability + size before downloading fully.
+  const probe = await probeStreamUrl(streamUrl).catch(err => {
+    throw new Error(`Could not verify the video link is still live (${err.response?.status ? `HTTP ${err.response.status}` : err.message}). It may have expired — try the command again.`);
+  });
+  if (probe.status >= 400) {
+    throw new Error(`Video link returned HTTP ${probe.status} — it has likely expired.`);
+  }
+  if (probe.contentType && !/^video\/|^application\/octet-stream/i.test(probe.contentType)) {
+    throw new Error(`Resolved link does not point to a video (content-type: ${probe.contentType}).`);
+  }
+  if (probe.contentLength && probe.contentLength > MAX_ANIME_VIDEO_BYTES) {
+    throw new Error(`This episode is too large to send over WhatsApp (${formatBytes(probe.contentLength)}, limit ${formatBytes(MAX_ANIME_VIDEO_BYTES)}). Try a lower-quality server or watch it directly.`);
+  }
+
+  console.log(`${ANIME_LOG_PREFIX} downloading stream buffer (${formatBytes(probe.contentLength)}, content-type: ${probe.contentType || 'unknown'})`);
+  const LARGE_FILE_NOTICE_BYTES = 30 * 1024 * 1024; // 30MB
+  if (onLargeFile && probe.contentLength > LARGE_FILE_NOTICE_BYTES) await onLargeFile(probe.contentLength);
+  const buffer = await downloadStreamBuffer(streamUrl);
+  if (buffer.length > MAX_ANIME_VIDEO_BYTES) {
+    throw new Error(`Downloaded video exceeds WhatsApp's size limit (${formatBytes(buffer.length)}).`);
+  }
+  return { buffer };
+}
+
 // ── Spotify oEmbed info ────────────────────────────────────────────────────
 async function spotifyInfo(url) {
   const { data } = await axios.get(
@@ -714,19 +907,32 @@ const downloadCommands = {
       try {
         const result = await gogoDownloadEpisode(titlePart, episodeNum);
         const caption = `🎌 *${result.title}*\n📺 Episode ${result.episodeNum}\n\n_Source: gogoanime mirror — unofficial._`;
-        await sock.sendMessage(jid, { text: `✅ Found! Sending video...\n\n${caption}` });
+        console.log(`${ANIME_LOG_PREFIX} resolved "${result.title}" ep ${result.episodeNum} -> ${result.streamUrl}`);
+        await sock.sendMessage(jid, { text: `✅ Found! Preparing video...\n\n${caption}` });
+
         try {
-          // Stream directly from the source rather than buffering the whole
-          // file in memory — anime episodes can be large.
-          await sock.sendMessage(jid, { video: { url: result.streamUrl }, caption, mimetype: 'video/mp4' });
+          const { buffer } = await prepareAnimeVideoForSend(result.streamUrl, {
+            onLargeFile: async (bytes) => {
+              await sock.sendMessage(jid, { text: `⏳ This episode is ${formatBytes(bytes)} — downloading may take a few minutes, please wait...` });
+            }
+          });
+          await withRetry(
+            () => sock.sendMessage(jid, { video: buffer, caption, mimetype: 'video/mp4' }),
+            { retries: 3, baseDelayMs: 1500, label: 'Baileys sendMessage(video)' }
+          );
+          console.log(`${ANIME_LOG_PREFIX} sent ${result.title} ep ${result.episodeNum} (${formatBytes(buffer.length)})`);
         } catch (sendErr) {
-          // Fallback: hand back the direct link if Baileys can't stream it
-          // (e.g. .m3u8 source, or the CDN rejects the fetch).
+          // Log the exact Baileys/pipeline error for diagnosis, but never
+          // forward the raw (often already-expired) stream URL to the user.
+          console.error(`${ANIME_LOG_PREFIX} failed to attach video for "${result.title}" ep ${result.episodeNum}:`, sendErr);
           await sock.sendMessage(jid, {
-            text: `⚠️ Could not attach the video directly (${sendErr.message}).\n\n📎 *Direct link:*\n${result.streamUrl}\n\n_Open this link in a browser or VLC to watch/download._`
+            text: `⚠️ *${result.title}* — Episode ${result.episodeNum} was found, but the video could not be attached.\n\n` +
+                  `Reason: ${sendErr.message}\n\n` +
+                  `_This is usually a source-side issue (expired/blocked link or unsupported format), not something a retry of the same command will fix immediately. You can try again in a moment, or try a different episode._`
           });
         }
       } catch (err) {
+        console.error(`${ANIME_LOG_PREFIX} lookup failed for "${titlePart}" ep ${episodeNum}:`, err);
         await sock.sendMessage(jid, { text: `❌ Anime download failed: ${err.message}` });
       }
     }
@@ -761,3 +967,6 @@ const downloadCommands = {
 };
 
 module.exports = downloadCommands;
+if (process.env.ANIMEDL_TEST_INTERNALS) {
+  module.exports._internals = { gogoDownloadEpisode, classifyStreamUrl, probeStreamUrl, downloadStreamBuffer, prepareAnimeVideoForSend };
+}
