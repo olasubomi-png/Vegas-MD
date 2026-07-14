@@ -472,6 +472,98 @@ async function handleAntiCall(sock, calls) {
   }
 }
 
+// ─────────────────────────────────────────────────────────
+// handleAntiChannel — delete WhatsApp channel links
+// Detects links of the form: whatsapp.com/channel/...
+// Toggle: antiChannel per-group boolean.
+// ─────────────────────────────────────────────────────────
+const CHANNEL_LINK_RE = /(?:https?:\/\/)?(?:www\.)?whatsapp\.com\/channel\/[A-Za-z0-9_-]+/i;
+
+async function handleAntiChannel(sock, message, botConfig) {
+  const jid = message.key?.remoteJid;
+  if (!jid?.endsWith('@g.us')) return false;
+
+  const settings = db.getGroup(jid);
+  if (!settings.antiChannel) return false;
+
+  const text = getMessageText(message);
+  if (!CHANNEL_LINK_RE.test(text)) return false;
+
+  const sender = message.key?.participant || jid;
+  if (resolveIsOwner(message, sender, botConfig)) return false;
+  if (await isGroupAdmin(sock, jid, sender)) return false;
+
+  const senderName = sender.split('@')[0];
+  try {
+    await sock.sendMessage(jid, { delete: message.key });
+    await sock.sendMessage(jid, {
+      text:     `📢 *Anti-Channel*\n\n@${senderName} sent a WhatsApp channel link — it was removed.`,
+      mentions: [sender]
+    });
+  } catch (err) {
+    console.error('[antiChannel]', err.message);
+  }
+  return true;
+}
+
+// ─────────────────────────────────────────────────────────
+// handleAntiStatus — delete messages forwarded from
+// WhatsApp Status (stories / broadcast).
+// Detects: contextInfo.remoteJid === 'status@broadcast'
+// or contextInfo.participant that is a status broadcast JID.
+// Toggle: antiStatus per-group boolean.
+// ─────────────────────────────────────────────────────────
+async function handleAntiStatus(sock, message, botConfig) {
+  const jid = message.key?.remoteJid;
+  if (!jid?.endsWith('@g.us')) return false;
+
+  const settings = db.getGroup(jid);
+  if (!settings.antiStatus) return false;
+
+  const sender = message.key?.participant || jid;
+  if (resolveIsOwner(message, sender, botConfig)) return false;
+  if (await isGroupAdmin(sock, jid, sender)) return false;
+
+  // A message forwarded from WhatsApp Status has its origin in
+  // 'status@broadcast'. Check all contextInfo locations.
+  const m = message.message || {};
+  const ctxList = [
+    m.extendedTextMessage?.contextInfo,
+    m.imageMessage?.contextInfo,
+    m.videoMessage?.contextInfo,
+    m.audioMessage?.contextInfo,
+    m.stickerMessage?.contextInfo,
+    m.documentMessage?.contextInfo,
+  ];
+
+  const isFromStatus = ctxList.some(ctx =>
+    ctx?.remoteJid === 'status@broadcast' ||
+    ctx?.participant?.endsWith('@s.whatsapp.net') === false && // broadcast
+    ctx?.remoteJid?.endsWith('@broadcast')
+  );
+
+  // Also catch the explicit forwardingScore path — status reposts are
+  // almost always marked as forwarded.
+  const anyCtx = ctxList.find(Boolean);
+  const isStatusForward =
+    isFromStatus ||
+    (anyCtx?.isForwarded && anyCtx?.remoteJid === 'status@broadcast');
+
+  if (!isStatusForward) return false;
+
+  const senderName = sender.split('@')[0];
+  try {
+    await sock.sendMessage(jid, { delete: message.key });
+    await sock.sendMessage(jid, {
+      text:     `📵 *Anti-Status*\n\n@${senderName} forwarded a WhatsApp Status — it was removed.`,
+      mentions: [sender]
+    });
+  } catch (err) {
+    console.error('[antiStatus]', err.message);
+  }
+  return true;
+}
+
 module.exports = {
   cacheMessage,
   handleAntiDelete,
@@ -481,4 +573,6 @@ module.exports = {
   handleAntiViewOnce,
   handleAutoReact,
   handleAntiCall,
+  handleAntiChannel,
+  handleAntiStatus,
 };

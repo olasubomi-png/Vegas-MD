@@ -214,6 +214,8 @@ const {
   handleAntiViewOnce,
   handleAutoReact,
   handleAntiCall,
+  handleAntiChannel,
+  handleAntiStatus,
 } = require('./events/protection');
 const { handleStatusUpdate } = require('./events/autoStatus');
 const allCommands    = require('./commands/index');
@@ -821,6 +823,20 @@ function attachHandlers(sock, saveCreds) {
 
           const prefix = db.getSetting('prefix') || botConfig.prefix || '.';
           console.log(`[WA] active prefix: "${prefix}"`);
+
+          if (!isFromMe && isJidGroup(jid)) {
+            const chBlocked = await handleAntiChannel(sock, message, botConfig).catch(e => {
+              console.error('[handler] antiChannel:', e.stack || e.message);
+              return false;
+            });
+            if (chBlocked) { console.log('[WA] antiChannel blocked message'); continue; }
+
+            const stBlocked = await handleAntiStatus(sock, message, botConfig).catch(e => {
+              console.error('[handler] antiStatus:', e.stack || e.message);
+              return false;
+            });
+            if (stBlocked) { console.log('[WA] antiStatus blocked message'); continue; }
+          }
 
           if (!isFromMe && text && isJidGroup(jid)) {
             const blocked = await handleAntiLink(sock, message, botConfig).catch(e => {

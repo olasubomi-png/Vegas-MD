@@ -219,16 +219,58 @@ const aiCommands = {
         // Guard: if pollinations returned an HTML error page instead of an image,
         // the content-type will be text/* — catch it early with a clear message.
         const ct = resp.headers['content-type'] || '';
-        if (!ct.startsWith('image/')) {
-          throw new Error(`Image service returned non-image response (${ct || 'unknown type'}). Try again.`);
-        }
+        if (!ct.startsWith('image/')) throw new Error('non-image response from primary');
 
         await sock.sendMessage(jid, {
           image:   Buffer.from(resp.data),
           caption: `${modeLabel} *Imagine AI*\n\n_"${prompt}"_`
         });
-      } catch (err) {
-        await sock.sendMessage(jid, { text: `❌ Image generation failed: ${err.message}` });
+      } catch (_primaryErr) {
+        // ── Fallback: flux-schnell (faster, more reliable model) ─────
+        try {
+          const encoded2 = encodeURIComponent(prompt);
+          const seed2    = Math.floor(Math.random() * 999999);
+          const fallbackUrl = `https://image.pollinations.ai/prompt/${encoded2}?model=flux-schnell&width=512&height=512&nologo=true&seed=${seed2}`;
+          const resp2 = await axios.get(fallbackUrl, {
+            responseType: 'arraybuffer',
+            timeout: 60000,
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              'Referer': 'https://pollinations.ai/',
+              'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8'
+            }
+          });
+          const ct2 = resp2.headers['content-type'] || '';
+          if (!ct2.startsWith('image/')) throw new Error('non-image response from fallback');
+          await sock.sendMessage(jid, {
+            image:   Buffer.from(resp2.data),
+            caption: `${modeLabel} *Imagine AI*\n\n_"${prompt}"_`
+          });
+        } catch (_fallbackErr) {
+          // ── Last resort: turbo model ──────────────────────────────
+          try {
+            const encoded3 = encodeURIComponent(prompt);
+            const seed3    = Math.floor(Math.random() * 999999);
+            const lastUrl  = `https://image.pollinations.ai/prompt/${encoded3}?model=turbo&width=512&height=512&nologo=true&seed=${seed3}`;
+            const resp3 = await axios.get(lastUrl, {
+              responseType: 'arraybuffer',
+              timeout: 60000,
+              headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+                'Referer': 'https://pollinations.ai/',
+                'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8'
+              }
+            });
+            const ct3 = resp3.headers['content-type'] || '';
+            if (!ct3.startsWith('image/')) throw new Error('non-image response from last resort');
+            await sock.sendMessage(jid, {
+              image:   Buffer.from(resp3.data),
+              caption: `${modeLabel} *Imagine AI*\n\n_"${prompt}"_`
+            });
+          } catch (err) {
+            await sock.sendMessage(jid, { text: `❌ Image generation failed after 3 attempts: ${err.message}` });
+          }
+        }
       }
     }
   },
