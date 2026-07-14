@@ -5,7 +5,10 @@
   "main": "main.js",
   "scripts": {
     "start": "node main.js",
-    "dev": "node main.js"
+    "dev": "node main.js",
+    "dashboard": "node dashboard/server/index.js",
+    "dashboard:setup": "npm install --prefix dashboard/client && npm run build --prefix dashboard/client",
+    "postinstall": "npm run dashboard:setup"
   },
   "keywords": [
     "whatsapp",
