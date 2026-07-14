@@ -34,7 +34,7 @@ outputType = "webview"
 [userenv.shared]
 OWNER_NUMBER = "2349112097911"
 ZST_API_KEY = "zst_QFpFjVK9LlJPB8BEujrSz3TdHHld52vVam9rQWrq"
-BOT_API_URL = "http://localhost:8090"
+BOT_API_URL = "http://13.60.31.145:8090"
 DASHBOARD_API_ENABLED = "true"
 
 [[ports]]
