@@ -199,12 +199,21 @@ async function gogoFindEpisodeUrl(slug, episodeNum) {
 // actual direct .mp4 (or .m3u8) source URL that the JW/HLS player loads.
 function extractPlayableUrlFromHtml(html) {
   // Try every pattern real-world embed hosts use, from most to least common.
+  // Direct Google-hosted sources (e.g. Blogger/n-bg resolvers returning a
+  // googlevideo.com "videoplayback" link) have no .m3u8/.mp4 file extension
+  // at all — they're dynamic URLs identified only by an "itag"/"mime" query
+  // param — so extension-specific patterns are tried first (safest/most
+  // specific), then a fallback set that accepts any http(s) URL in the same
+  // JS/JSON shapes.
   const patterns = [
     /file:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i,     // JWPlayer: file: "..."
     /"file"\s*:\s*"([^"]+\.(?:m3u8|mp4)[^"]*)"/i,        // JSON: "file":"..."
     /sources\s*:\s*\[\s*\{\s*(?:file|src)\s*:\s*["']([^"']+)["']/i, // sources: [{file: "..."}]
     /<source[^>]+src=["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i,        // <source src="...">
     /(https?:\/\/[^\s"'<>]+\.m3u8[^\s"'<>]*)/i,          // bare .m3u8 URL anywhere
+    /(?:var\s+fileUrl|file)\s*=?\s*[:=]?\s*["'](https?:\/\/[^"']+)["']/i, // JWPlayer var fileUrl = "..." (no extension, e.g. googlevideo.com)
+    /"file"\s*:\s*"(https?:\/\/[^"]+)"/i,                // JSON "file":"..." with no extension
+    /sources\s*:\s*\[\s*\{\s*(?:file|src)\s*:\s*["'](https?:\/\/[^"']+)["']/i, // sources: [{file: "https://..."}] no extension
   ];
   for (const re of patterns) {
     const m = html.match(re);

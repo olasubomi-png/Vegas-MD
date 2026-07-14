@@ -21,3 +21,10 @@ Episode pages list "servers"; each server type needs different resolution:
 **Why this matters:** don't assume a "no server resolved" failure is a code regression — check what server types are actually listed on the episode page first (`data-type='...'` attributes) before debugging the regex/AJAX logic.
 
 **How to apply:** A durable fix would need a headless browser (e.g. Playwright) executing each embed's JS and capturing the real network request, since regex-matching keeps losing to host-specific obfuscation as embed providers rotate (e.g. awish.pro went from a working embed to a parked domain between when this scraper was written and 2026-07-14).
+
+## Stream-URL regex must not require a file extension
+Fixed 2026-07-14: the "Blogger" AJAX server type's `n-bg` resolver (the *working* branch, as opposed to the broken `histream` one) returns a real playable `googlevideo.com/videoplayback?...` URL — but that URL has no `.m3u8`/`.mp4` extension (Google identifies the format via a `mime=video/mp4` *query param*, not the path). The original `extractPlayableUrlFromHtml` patterns all required a literal `.m3u8`/`.mp4` extension in the matched URL, so they silently returned null on every otherwise-successful Blogger resolution — episodes fell through to "no auto-downloadable server" even though a working direct URL was sitting in the response body.
+
+**Why this matters:** any regex meant to pull a "file"/"source" URL out of a video-player page must not assume a file extension — CDN-signed streaming URLs (googlevideo.com, akamai, etc.) very often have none.
+
+**How to apply:** keep both extension-specific patterns (tried first, safest) and extension-agnostic fallback patterns (same JS/JSON shapes, any `http(s)://` value) in `extractPlayableUrlFromHtml`. After this fix, titles whose episode page lists a `Blogger` server (e.g. Demon Slayer, Jujutsu Kaisen) resolve correctly; titles with only dead `embed` hosts (awish.pro/dood.wf/alions.pro) or only the broken `hianime`/`histream` path (e.g. One Piece, Naruto Shippuuden as of 2026-07-14) still have no working server — that part remains a genuine site-side gap, not a code bug.
