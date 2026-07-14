@@ -68,6 +68,11 @@ events/           WhatsApp event handlers
 ## Dashboard (`dashboard/`)
 Two-step start: `npm install` in the repo root (server deps) **and** in `dashboard/client` (React client), then `npm run build` inside `dashboard/client` to produce `dashboard/client/dist` (the server serves this as static files; without it, `/` shows a "not built yet" placeholder). The `Dashboard` workflow runs `node dashboard/server/index.js`.
 
+## Downloader Commands (`commands/download.js`)
+- **YouTube (`.yt`/`.ytmp3`/`.ytmp4`/`.song`/`.play`/`.video`/`.spotify`)**: use `yt-dlp` (installed as a system dependency). Fixed 2026-07-14: YouTube's SABR streaming rollout was breaking every yt-dlp download with "content not available on this app" — `player_client=android,web` extractor args fixed it. If YouTube breaks downloads again in the future, check https://github.com/yt-dlp/yt-dlp for a newer release / updated extractor-args first.
+- **Anime (`.animedl`, via gogoanime.by)**: search now queries the site's `wp-json/wp/v2/search` REST endpoint (up to 50 results) and scores by title-match quality, instead of trusting the HTML search page's top ~10 hits — this fixes long-running series (One Piece, Naruto, etc.) resolving to the wrong spinoff/recap. Stream-URL extraction now recognizes more embed-host formats and follows one client-side JS redirect.
+  - **Known remaining limitation**: as of 2026-07-14, most currently-listed servers on gogoanime.by episode pages are the `hianime` type, which routes through a resolver that 500s on the provider's own server (not fixable client-side — see code comments in `gogoResolveAjaxServer`). The command replies with a manual watch link when no server resolves, rather than failing silently. This is a mirror-site reliability issue, not a bug — expect it to keep shifting as gogoanime.by's embed providers rotate.
+
 ## Default Bot Prefix
 `.` (configurable via `.setprefix`)
 

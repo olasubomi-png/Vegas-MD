@@ -1,1 +1,3 @@
 - [ZST Labs plugin](zstlab-plugin.md) — 79 commands in plugins/zstlab.js; ZST_API_KEY in env; adds movies/anime/sports/religion/canvas categories
+- [GogoAnime scraper reliability](gogoanime-scraper.md) — use wp-json search (not HTML page) for correct series match; hianime server type is broken site-side, not a code bug
+- [YouTube yt-dlp SABR fix](youtube-ytdlp-sabr.md) — YouTube's SABR rollout breaks yt-dlp without `player_client=android,web` extractor args

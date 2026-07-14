@@ -64,13 +64,17 @@ async function ytDlpDownload(url, format = 'audio', quality = '720') {
   assertYouTubeUrl(url);
 
   const outTemplate = tmpFile('');          // base path without extension
+  // player_client=android,web works around YouTube's SABR streaming rollout
+  // (web-only formats get skipped without a URL) — android formats need no
+  // PO token for the "best" muxed/adaptive formats yt-dlp picks here.
+  const clientArgs = ['--extractor-args', 'youtube:player_client=android,web'];
   const args = format === 'audio'
     ? ['-x', '--audio-format', 'mp3', '--audio-quality', '5',
        '-o', outTemplate + '.%(ext)s', url,
-       '--no-playlist', '--max-filesize', '90m']
+       '--no-playlist', '--max-filesize', '90m', ...clientArgs]
     : ['-f', `best[height<=${quality}][ext=mp4]/best[height<=${quality}]/best[ext=mp4]/best`,
        '-o', outTemplate + '.%(ext)s', url,
-       '--no-playlist', '--max-filesize', '90m'];
+       '--no-playlist', '--max-filesize', '90m', ...clientArgs];
 
   await execFileAsync('yt-dlp', args, { timeout: 180000 });
 
@@ -126,16 +130,54 @@ async function gogoGet(url) {
   return data;
 }
 
+function decodeHtmlEntities(s) {
+  return s
+    .replace(/&#8211;/g, '-').replace(/&#8217;/g, "'").replace(/&#038;|&amp;/g, '&')
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(parseInt(n, 10)))
+    .replace(/&quot;/g, '"').replace(/&#8216;/g, "'");
+}
+
+function normalizeTitle(s) {
+  return decodeHtmlEntities(s).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
 // Search gogoanime.by and return the best-matching series page slug + title.
+//
+// The site's default WordPress search (the HTML "?s=" page) only surfaces
+// its first ~10 relevance-ranked hits, and for long-running series (One
+// Piece, Naruto, etc.) that page is dominated by side-stories/recaps/specials
+// sharing the same words — the actual main series often doesn't make that
+// cut. The wp-json REST search endpoint returns up to 50 results, letting us
+// score for the best title match ourselves instead of trusting WP's ranking.
 async function gogoSearchSeries(query) {
-  const html = await gogoGet(`${GOGO_BASE}/?s=${encodeURIComponent(query)}`);
-  const re = /<a href="https:\/\/gogoanime\.by\/series\/([a-z0-9-]+)\/"[^>]*title="([^"]+)"/g;
-  const matches = [];
-  let m;
-  while ((m = re.exec(html))) matches.push({ slug: m[1], title: m[2] });
-  if (!matches.length) return null;
-  // Dedupe by slug, prefer the first (most relevant) hit
-  return matches.find((v, i, arr) => arr.findIndex(x => x.slug === v.slug) === i);
+  const { data } = await axios.get(`${GOGO_BASE}/wp-json/wp/v2/search`, {
+    params: { search: query, per_page: 50 },
+    headers: { 'User-Agent': GOGO_UA },
+    timeout: 20000
+  });
+  if (!Array.isArray(data) || !data.length) return null;
+
+  const candidates = data
+    .map(item => {
+      const m = /\/series\/([^/]+)\/?$/.exec(item.url || '');
+      return m ? { slug: decodeURIComponent(m[1]), title: decodeHtmlEntities(item.title || '') } : null;
+    })
+    .filter(Boolean);
+  if (!candidates.length) return null;
+
+  const nq = normalizeTitle(query);
+  const scored = candidates.map(c => {
+    const nt = normalizeTitle(c.title);
+    let score;
+    if (nt === nq) score = 0;                          // exact title match
+    else if (nt.startsWith(nq + ' ') || nt === nq) score = 1;
+    else if (nt.startsWith(nq)) score = 2;
+    else if (nt.includes(' ' + nq + ' ') || nt.includes(nq)) score = 3;
+    else score = 4;
+    return { ...c, score, len: nt.length };
+  });
+  scored.sort((a, b) => a.score - b.score || a.len - b.len);
+  return scored[0];
 }
 
 // Given a series slug + episode number, find the actual episode page URL.
@@ -155,10 +197,35 @@ async function gogoFindEpisodeUrl(slug, episodeNum) {
 
 // Resolve an embed page (e.g. megaplay.su/embed.php?sid=...) down to the
 // actual direct .mp4 (or .m3u8) source URL that the JW/HLS player loads.
+function extractPlayableUrlFromHtml(html) {
+  // Try every pattern real-world embed hosts use, from most to least common.
+  const patterns = [
+    /file:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i,     // JWPlayer: file: "..."
+    /"file"\s*:\s*"([^"]+\.(?:m3u8|mp4)[^"]*)"/i,        // JSON: "file":"..."
+    /sources\s*:\s*\[\s*\{\s*(?:file|src)\s*:\s*["']([^"']+)["']/i, // sources: [{file: "..."}]
+    /<source[^>]+src=["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i,        // <source src="...">
+    /(https?:\/\/[^\s"'<>]+\.m3u8[^\s"'<>]*)/i,          // bare .m3u8 URL anywhere
+  ];
+  for (const re of patterns) {
+    const m = html.match(re);
+    if (m) return m[1].replace(/\\\//g, '/');
+  }
+  return null;
+}
+
 async function gogoExtractStreamUrl(embedUrl) {
   const html = await gogoGet(embedUrl);
-  const m = html.match(/file:\s*["']([^"']+)["']/);
-  return m ? m[1] : null;
+  const found = extractPlayableUrlFromHtml(html);
+  if (found) return found;
+  // Some embed hosts bounce through a client-side redirect
+  // (window.location.replace('...')) before rendering the real player —
+  // follow it once and retry.
+  const redirect = html.match(/window\.location\.replace\(\s*['"]([^'"]+)['"]/);
+  if (redirect) {
+    const html2 = await gogoGet(redirect[1]).catch(() => null);
+    if (html2) return extractPlayableUrlFromHtml(html2);
+  }
+  return null;
 }
 
 // Parse every server option ("player-type-link") listed on an episode page,
@@ -211,8 +278,7 @@ async function gogoResolveAjaxServer(server, featureImage, postId) {
   });
   const html = resolvedHtml + '';
   if (/no available video source/i.test(html)) return null; // resolver has nothing for this episode
-  const fileMatch = html.match(/"file"\s*:\s*"([^"]+)"/) || html.match(/file:\s*["']([^"']+)["']/);
-  return fileMatch ? fileMatch[1] : null;
+  return extractPlayableUrlFromHtml(html);
 }
 
 // Try every server listed on an episode page until one yields a real
