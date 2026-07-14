@@ -343,10 +343,11 @@ const groupCommands = {
         }
 
         // ── Verify bot is an admin in the target group ─────────────
-        // Compare by digits only so @s.whatsapp.net vs @c.us and :device suffix never cause false misses
-        const digitsOnly = id => (id || '').replace(/\D/g, '');
-        const botNum     = digitsOnly(sock.user?.id || '');
-        const botInTgt   = botNum ? tgtMeta.participants.find(p => digitsOnly(p.id) === botNum) : null;
+        // Extract only the phone-number part: strip device (:N) and domain (@...) first,
+        // then take digits — avoids false misses from @c.us vs @s.whatsapp.net or :0 device suffix
+        const phoneNum = id => (id || '').split('@')[0].split(':')[0].replace(/\D/g, '');
+        const botNum   = phoneNum(sock.user?.id || '');
+        const botInTgt   = botNum ? tgtMeta.participants.find(p => phoneNum(p.id) === botNum) : null;
         if (!botInTgt) {
           return sock.sendMessage(jid, {
             text: `❌ The bot is *not a member* of *${tgtMeta.subject}*.\nAdd the bot to that group first, then retry.`
