@@ -141,58 +141,137 @@ function normalizeTitle(s) {
   return decodeHtmlEntities(s).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
-// Search gogoanime.by and return the best-matching series page slug + title.
-//
-// The site's default WordPress search (the HTML "?s=" page) only surfaces
-// its first ~10 relevance-ranked hits, and for long-running series (One
-// Piece, Naruto, etc.) that page is dominated by side-stories/recaps/specials
-// sharing the same words — the actual main series often doesn't make that
-// cut. The wp-json REST search endpoint returns up to 50 results, letting us
-// score for the best title match ourselves instead of trusting WP's ranking.
-async function gogoSearchSeries(query) {
-  const { data } = await axios.get(`${GOGO_BASE}/wp-json/wp/v2/search`, {
-    params: { search: query, per_page: 50 },
-    headers: { 'User-Agent': GOGO_UA },
-    timeout: 20000
-  });
-  if (!Array.isArray(data) || !data.length) return null;
+// ── Search helpers ──────────────────────────────────────────────────────────
 
-  const candidates = data
-    .map(item => {
-      const m = /\/series\/([^/]+)\/?$/.exec(item.url || '');
-      return m ? { slug: decodeURIComponent(m[1]), title: decodeHtmlEntities(item.title || '') } : null;
-    })
-    .filter(Boolean);
-  if (!candidates.length) return null;
+// Score and rank a list of candidates against a query. Returns the best match
+// or null if nothing has meaningful word overlap with the query.
+function scoreCandidates(candidates, query) {
+  const nq         = normalizeTitle(query);
+  const queryWords = nq.split(' ').filter(Boolean);
 
-  const nq = normalizeTitle(query);
   const scored = candidates.map(c => {
-    const nt = normalizeTitle(c.title);
+    const nt         = normalizeTitle(c.title);
+    const titleWords = nt.split(' ').filter(Boolean);
     let score;
-    if (nt === nq) score = 0;                          // exact title match
-    else if (nt.startsWith(nq + ' ') || nt === nq) score = 1;
-    else if (nt.startsWith(nq)) score = 2;
-    else if (nt.includes(' ' + nq + ' ') || nt.includes(nq)) score = 3;
-    else score = 4;
+
+    if (nt === nq)                                             score = 0; // exact
+    else if (nt.startsWith(nq + ' ') || nt.startsWith(nq))   score = 1; // starts with query
+    else if (nt.includes(nq))                                 score = 2; // query is substring
+    else {
+      // Word-overlap: ratio of query words found in the title
+      const matched = queryWords.filter(w => titleWords.includes(w));
+      const ratio   = matched.length / queryWords.length;
+      if      (ratio >= 0.8) score = 2.5;
+      else if (ratio >= 0.5) score = 3;
+      else if (ratio >  0)   score = 3.5;
+      else                   score = 99;  // no overlap at all — discard
+    }
+
+    // Prefer results that live under /series/ (posts vs categories vs pages)
+    if (c.preferSeries) score -= 0.1;
+
     return { ...c, score, len: nt.length };
-  });
+  }).filter(c => c.score < 99);
+
+  if (!scored.length) return null;
   scored.sort((a, b) => a.score - b.score || a.len - b.len);
   return scored[0];
 }
 
+// Fetch candidates from the wp-json REST search endpoint (fast, up to 50 hits).
+async function gogoRestCandidates(query) {
+  try {
+    const { data } = await axios.get(`${GOGO_BASE}/wp-json/wp/v2/search`, {
+      params: { search: query, per_page: 50 },
+      headers: { 'User-Agent': GOGO_UA },
+      timeout: 20000,
+    });
+    if (!Array.isArray(data) || !data.length) return [];
+    return data.flatMap(item => {
+      const url = item.url || '';
+      // Accept /series/ slugs and also top-level slugs (some series live at /slug/ not /series/slug/)
+      const seriesM = /\/series\/([^/?#]+)\/?$/.exec(url);
+      const topM    = !seriesM && /gogoanime\.by\/([^/?#]+)\/?$/.exec(url);
+      const m       = seriesM || topM;
+      if (!m) return [];
+      return [{ slug: decodeURIComponent(m[1]), title: decodeHtmlEntities(item.title || ''), preferSeries: Boolean(seriesM) }];
+    });
+  } catch (_) {
+    return [];
+  }
+}
+
+// Fallback: scrape the HTML search results page for /series/ links.
+async function gogoHtmlCandidates(query) {
+  try {
+    const { data: html } = await axios.get(`${GOGO_BASE}/?s=${encodeURIComponent(query)}`, {
+      headers: { 'User-Agent': GOGO_UA },
+      timeout: 20000,
+    });
+    const candidates = [];
+    // Match href="/series/slug/" with any link text nearby
+    const re = /href="https?:\/\/(?:www\.)?gogoanime\.by\/series\/([^/"]+)\/?"/gi;
+    let m;
+    while ((m = re.exec(html)) !== null) {
+      const slug = decodeURIComponent(m[1]);
+      // Extract the nearest text node after the href as a title approximation
+      const snippet = html.slice(m.index, m.index + 300);
+      const titleM  = snippet.match(/title="([^"]+)"|>([^<]{3,80})<\/a/);
+      const title   = decodeHtmlEntities((titleM?.[1] || titleM?.[2] || slug).trim());
+      candidates.push({ slug, title, preferSeries: true });
+    }
+    return candidates;
+  } catch (_) {
+    return [];
+  }
+}
+
+// Search gogoanime.by for the best-matching series using three strategies in
+// order: REST API → shortened query REST → HTML search page fallback.
+// Returns { slug, title } or null.
+async function gogoSearchSeries(query) {
+  // Strategy 1: wp-json REST (widest result set, best for exact/common titles)
+  let candidates = await gogoRestCandidates(query);
+  let best = scoreCandidates(candidates, query);
+  if (best) return best;
+
+  // Strategy 2: try first 3 words only (helps with long subtitles / season tags)
+  const words = query.trim().split(/\s+/);
+  if (words.length > 3) {
+    const shortQ = words.slice(0, 3).join(' ');
+    candidates = await gogoRestCandidates(shortQ);
+    best = scoreCandidates(candidates, query); // still score against original query
+    if (best) return best;
+  }
+
+  // Strategy 3: HTML search page (different indexing, catches some titles the
+  // REST API misses, especially newer additions)
+  candidates = await gogoHtmlCandidates(query);
+  return scoreCandidates(candidates, query);
+}
+
 // Given a series slug + episode number, find the actual episode page URL.
+// Uses a broad regex (any gogoanime.by URL containing "episode-N") then picks
+// the most specific match — much more resilient than the old strict pattern.
 async function gogoFindEpisodeUrl(slug, episodeNum) {
   const html = await gogoGet(`${GOGO_BASE}/series/${slug}/`);
-  const re = new RegExp(
-    `href="(https:\\/\\/gogoanime\\.by\\/[a-z0-9-]*episode-${episodeNum}-[a-z-]*\\/?)"[^>]*>\\s*Episode\\s+${episodeNum}\\s*<`,
-    'i'
+
+  // Collect every gogoanime.by href that contains "episode-<N>" anywhere
+  const broad = new RegExp(
+    `href="(https?:\\/\\/(?:www\\.)?gogoanime\\.by\\/[^"]*episode-${episodeNum}[^"]*)"`,
+    'gi'
   );
-  const m = html.match(re);
-  if (m) return m[1];
-  // Fallback: some entries omit the trailing "-subbed/-dubbed" text in the href capture above
-  const re2 = new RegExp(`href="(https:\\/\\/gogoanime\\.by\\/${slug}-episode-${episodeNum}-[a-z]+-[a-z]+)\\/?"`, 'i');
-  const m2 = html.match(re2);
-  return m2 ? m2[1] : null;
+  const allMatches = [];
+  let m;
+  while ((m = broad.exec(html)) !== null) {
+    const u = m[1];
+    if (!allMatches.includes(u)) allMatches.push(u);
+  }
+  if (!allMatches.length) return null;
+
+  // Rank: prefer URLs that include the series slug (most specific)
+  const withSlug = allMatches.filter(u => u.includes(slug));
+  return withSlug[0] || allMatches[0];
 }
 
 // Resolve an embed page (e.g. megaplay.su/embed.php?sid=...) down to the
@@ -433,139 +512,192 @@ function formatBytes(n) {
   return `${(n / (1024 * 1024)).toFixed(1)}MB`;
 }
 
-// Stream a remote video URL to a local temp file with:
-//  - Redirect following (axios maxRedirects)
-//  - Progress callbacks every 10% (non-blocking, fire-and-forget)
-//  - Total-transfer timeout enforced via a manual timer (not just connection timeout)
-//  - Content-Length and Content-Type verification
-//  - Hard size-cap enforced while streaming (no OOM risk)
+// Stream a remote video URL to a local temp file, self-resuming on connection
+// drops using HTTP Range requests (bytes=N-) so an 80%-complete download picks
+// up from byte 80% rather than restarting from zero.
+//
+// Behaviour:
+//  - Up to 4 attempts; each retry checks existing file size and sends Range
+//  - Server that ignores Range gets a clean restart (flag: 'w' not 'a')
+//  - Content-Type verified on first response; Content-Length verified at end
+//    with 2% tolerance (some CDNs round-trip slightly different values)
+//  - Progress callback fired every 10% (non-blocking, fire-and-forget)
+//  - Hard size cap enforced while streaming
+//  - Per-attempt stall timeout; resets across retry attempts
 //
 // Returns { downloaded, contentType, contentLength } on success.
-// Throws with a precise, user-facing reason on every failure path.
+// Throws with a user-facing reason on every failure path.
 async function downloadStreamToFile(url, destPath, {
   onProgress,
   timeoutMs  = ANIME_DOWNLOAD_TIMEOUT_MS,
   maxBytes   = MAX_ANIME_VIDEO_BYTES,
   label      = 'download',
 } = {}) {
-  // axios follows redirects automatically; capture the final URL from the
-  // underlying http.ClientRequest so we can log it.
-  let response;
-  try {
-    response = await axios({
-      method: 'GET',
-      url,
-      headers: ANIME_STREAM_HEADERS,
-      responseType: 'stream',
-      maxRedirects: 10,
-      // Connection / response-headers timeout only — total transfer is guarded
-      // by the manual timer below, since axios's own `timeout` for streaming
-      // responses only applies to the initial connection phase.
-      timeout: 30000,
-    });
-  } catch (err) {
-    const status = err.response?.status;
-    throw new Error(
-      status
-        ? `HTTP ${status} while connecting to video source`
-        : `Failed to connect to video source: ${err.message}`
-    );
-  }
+  const MAX_ATTEMPTS = 4;
+  let totalOnDisk  = 0;  // bytes successfully on disk so far (grows across retries)
+  let contentLength = null;
+  let contentType   = '';
+  let lastStep      = -1; // last 10%-step sent to onProgress (persists across retries)
 
-  const finalUrl = response.request?.res?.responseUrl || response.config?.url || url;
-  if (finalUrl && finalUrl !== url) {
-    console.log(`${ANIME_LOG_PREFIX} [${label}] redirect → ${finalUrl}`);
-  }
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    // ── Determine resume offset ──────────────────────────────────────────────
+    let resumeFrom = 0;
+    if (attempt > 1 && fs.existsSync(destPath)) {
+      try { resumeFrom = fs.statSync(destPath).size; } catch (_) {}
+    }
+    totalOnDisk = resumeFrom;
 
-  const contentType   = response.headers['content-type'] || '';
-  const contentLength = Number(response.headers['content-length']) || null;
-
-  // Verify Content-Type before writing a single byte
-  if (contentType && !/^video\/|^application\/octet-stream/i.test(contentType)) {
-    response.data.destroy();
-    throw new Error(`Server returned unexpected content-type: "${contentType}" — this is not a video`);
-  }
-
-  // Verify Content-Length upfront (if provided)
-  if (contentLength && contentLength > maxBytes) {
-    response.data.destroy();
-    throw new Error(`File too large: ${formatBytes(contentLength)} exceeds the ${formatBytes(maxBytes)} limit`);
-  }
-
-  console.log(
-    `${ANIME_LOG_PREFIX} [${label}] download started` +
-    ` — size: ${formatBytes(contentLength)}, type: ${contentType || 'unknown'}`
-  );
-
-  return new Promise((resolve, reject) => {
-    const writeStream = fs.createWriteStream(destPath);
-    let downloaded     = 0;
-    let lastStep       = -1; // last 10%-step reported to onProgress
-    let settled        = false;
-
-    function fail(err) {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      try { response.data.destroy(); } catch (_) {}
-      try { writeStream.destroy(); } catch (_) {}
-      reject(err);
+    const reqHeaders = { ...ANIME_STREAM_HEADERS };
+    if (resumeFrom > 0) {
+      reqHeaders['Range'] = `bytes=${resumeFrom}-`;
+      console.log(`${ANIME_LOG_PREFIX} [${label}] resume from ${formatBytes(resumeFrom)} (attempt ${attempt}/${MAX_ATTEMPTS})`);
+    } else if (attempt > 1) {
+      console.log(`${ANIME_LOG_PREFIX} [${label}] retry from scratch (attempt ${attempt}/${MAX_ATTEMPTS})`);
     }
 
-    // Total-transfer timeout — kills the stream if the full download hasn't
-    // finished within `timeoutMs`, regardless of whether chunks are still
-    // trickling in (prevents indefinite hangs on very slow servers).
-    const timer = setTimeout(() => {
-      fail(new Error(
-        `Download timed out after ${Math.round(timeoutMs / 1000)}s ` +
-        `(received ${formatBytes(downloaded)} of ${formatBytes(contentLength)})`
-      ));
-    }, timeoutMs);
-
-    response.data.on('data', chunk => {
-      downloaded += chunk.length;
-
-      // Hard cap enforced while streaming — abort immediately if exceeded
-      if (downloaded > maxBytes) {
-        fail(new Error(`Download exceeded size limit of ${formatBytes(maxBytes)}`));
-        return;
+    // ── Open HTTP connection ─────────────────────────────────────────────────
+    let response;
+    try {
+      response = await axios({
+        method: 'GET',
+        url,
+        headers: reqHeaders,
+        responseType: 'stream',
+        maxRedirects: 10,
+        timeout: 30000, // connection/headers only; transfer guarded by stall timer
+      });
+    } catch (err) {
+      const status = err.response?.status;
+      if (status >= 400 && status < 500) {
+        throw new Error(`HTTP ${status} — video link expired or unavailable`);
       }
+      if (attempt === MAX_ATTEMPTS) {
+        throw new Error(`Could not connect after ${MAX_ATTEMPTS} attempts: ${err.message}`);
+      }
+      console.warn(`${ANIME_LOG_PREFIX} [${label}] connect error (attempt ${attempt}): ${err.message}`);
+      await new Promise(r => setTimeout(r, 3000 * attempt));
+      continue;
+    }
 
-      // Non-blocking progress callbacks every 10%
-      if (onProgress && contentLength) {
-        const pct  = Math.floor((downloaded / contentLength) * 100);
-        const step = Math.floor(pct / 10) * 10;
-        if (step > lastStep && step <= 100) {
-          lastStep = step;
-          // Fire-and-forget — never block the stream on a WhatsApp send
-          Promise.resolve(onProgress(step, downloaded, contentLength)).catch(() => {});
+    // Log redirect
+    const finalUrl = response.request?.res?.responseUrl || url;
+    if (finalUrl !== url) console.log(`${ANIME_LOG_PREFIX} [${label}] redirect → ${finalUrl}`);
+
+    const isPartial = response.status === 206;
+
+    // ── Capture metadata from first successful response ──────────────────────
+    if (contentLength === null) {
+      contentType = response.headers['content-type'] || '';
+      if (contentType && !/^video\/|^application\/octet-stream/i.test(contentType)) {
+        response.data.destroy();
+        throw new Error(`Server returned unexpected content-type: "${contentType}" — not a video`);
+      }
+      if (isPartial) {
+        const cr = response.headers['content-range'] || '';
+        contentLength = Number(cr.split('/')[1]) || null;
+      } else {
+        contentLength = Number(response.headers['content-length']) || null;
+      }
+      if (contentLength && contentLength > maxBytes) {
+        response.data.destroy();
+        throw new Error(`File too large: ${formatBytes(contentLength)} exceeds ${formatBytes(maxBytes)} limit`);
+      }
+      console.log(`${ANIME_LOG_PREFIX} [${label}] download started — ${formatBytes(contentLength)}, type: ${contentType || 'unknown'}`);
+    }
+
+    // Server ignored Range header — restart from 0
+    if (resumeFrom > 0 && !isPartial) {
+      console.warn(`${ANIME_LOG_PREFIX} [${label}] server rejected Range — restarting from byte 0`);
+      resumeFrom   = 0;
+      totalOnDisk  = 0;
+    }
+
+    // ── Stream to file ───────────────────────────────────────────────────────
+    const writeStream = fs.createWriteStream(destPath, { flags: resumeFrom > 0 ? 'a' : 'w' });
+
+    const { ok, chunkBytes, failErr } = await new Promise(resolve => {
+      let chunkBytes = 0;
+      let settled    = false;
+
+      function done(ok, failErr) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(stall);
+        if (!ok) {
+          try { response.data.destroy(); } catch (_) {}
+          try { writeStream.destroy(); }  catch (_) {}
         }
+        resolve({ ok, chunkBytes, failErr });
       }
-    });
 
-    response.data.on('error', err => fail(new Error(`Stream read error: ${err.message}`)));
-    writeStream.on('error',   err => fail(new Error(`File write error: ${err.message}`)));
-
-    writeStream.on('finish', () => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-
-      // Verify that we received what was promised (allow 1KB tolerance for
-      // CDNs that report a slightly off Content-Length)
-      if (contentLength && Math.abs(downloaded - contentLength) > 1024) {
-        reject(new Error(
-          `Download incomplete: received ${formatBytes(downloaded)}, expected ${formatBytes(contentLength)}`
+      // Stall timer: kill this attempt if no progress for the full timeout.
+      // It's reset-able but a simple one-shot is enough — if the connection
+      // is truly stalled for 10 minutes we want to abort and retry anyway.
+      const stall = setTimeout(() => {
+        done(false, new Error(
+          `Transfer stalled — received ${formatBytes(totalOnDisk + chunkBytes)} ` +
+          `of ${formatBytes(contentLength)} after ${Math.round(timeoutMs / 1000)}s`
         ));
-        return;
-      }
+      }, timeoutMs);
 
-      console.log(`${ANIME_LOG_PREFIX} [${label}] download completed — ${formatBytes(downloaded)}`);
-      resolve({ downloaded, contentType, contentLength: contentLength || downloaded });
+      response.data.on('data', chunk => {
+        chunkBytes += chunk.length;
+        const allBytes = totalOnDisk + chunkBytes;
+        if (allBytes > maxBytes) {
+          done(false, new Error(`Exceeded ${formatBytes(maxBytes)} size limit`));
+          return;
+        }
+        if (onProgress && contentLength) {
+          const pct  = Math.floor((allBytes / contentLength) * 100);
+          const step = Math.floor(pct / 10) * 10;
+          if (step > lastStep && step <= 100) {
+            lastStep = step;
+            // Fire-and-forget — never block the stream on a WhatsApp send
+            Promise.resolve(onProgress(step, allBytes, contentLength)).catch(() => {});
+          }
+        }
+      });
+
+      response.data.on('error', err => done(false, Object.assign(new Error(`Stream error: ${err.message}`), { retryable: true })));
+      writeStream.on('error',   err => done(false, Object.assign(new Error(`Write error: ${err.message}`),  { retryable: false })));
+
+      writeStream.on('finish', () => {
+        console.log(`${ANIME_LOG_PREFIX} [${label}] chunk done — wrote ${formatBytes(chunkBytes)} (total on disk: ${formatBytes(totalOnDisk + chunkBytes)})`);
+        done(true);
+      });
+
+      response.data.pipe(writeStream);
     });
 
-    response.data.pipe(writeStream);
-  });
+    totalOnDisk += chunkBytes;
+
+    if (ok) {
+      // Verify final size — allow 2% tolerance (CDNs sometimes round Content-Length)
+      const tolerance = contentLength
+        ? Math.max(Math.ceil(contentLength * 0.02), 64 * 1024)
+        : Infinity;
+      if (contentLength && Math.abs(totalOnDisk - contentLength) > tolerance) {
+        if (attempt < MAX_ATTEMPTS) {
+          console.warn(`${ANIME_LOG_PREFIX} [${label}] size mismatch — got ${formatBytes(totalOnDisk)}, expected ${formatBytes(contentLength)}; will resume`);
+          await new Promise(r => setTimeout(r, 2000));
+          continue;
+        }
+        throw new Error(`Download incomplete: received ${formatBytes(totalOnDisk)}, expected ${formatBytes(contentLength)}`);
+      }
+      console.log(`${ANIME_LOG_PREFIX} [${label}] download completed — ${formatBytes(totalOnDisk)}`);
+      return { downloaded: totalOnDisk, contentType, contentLength: contentLength || totalOnDisk };
+    }
+
+    // ── Attempt failed ───────────────────────────────────────────────────────
+    if (attempt === MAX_ATTEMPTS || failErr?.retryable === false) {
+      throw new Error(failErr?.message || 'Download failed');
+    }
+    const delay = 3000 * attempt;
+    console.warn(`${ANIME_LOG_PREFIX} [${label}] attempt ${attempt} failed: ${failErr?.message} — retrying in ${delay / 1000}s (will resume from ${formatBytes(totalOnDisk)})`);
+    await new Promise(r => setTimeout(r, delay));
+  }
+
+  throw new Error('Download failed after all attempts');
 }
 
 // Remux an HLS (.m3u8) stream into a single playable .mp4 file via ffmpeg.
@@ -657,10 +789,9 @@ async function prepareAnimeVideoFile(streamUrl, { onProgress, label = 'anime' } 
     ` (${formatBytes(probe.contentLength)}, type: ${probe.contentType || 'unknown'})`
   );
 
-  await withRetry(
-    () => downloadStreamToFile(streamUrl, tempPath, { onProgress, label }),
-    { retries: 3, baseDelayMs: 2000, label: 'stream download to file' }
-  );
+  // downloadStreamToFile handles its own retries + Range-resume internally;
+  // no outer withRetry needed here.
+  await downloadStreamToFile(streamUrl, tempPath, { onProgress, label });
 
   const { size } = fs.statSync(tempPath);
   if (size > MAX_ANIME_VIDEO_BYTES) {

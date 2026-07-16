@@ -1079,15 +1079,38 @@ async function handleCommand(command, args, message, sock, botConfig) {
     ? () => isGroupAdmin(jid, sender)
     : async () => false;
 
+  // _react(emoji): send/update a reaction on the command message.
+  // Fire-and-forget — never throws; reactions are best-effort.
+  message._react = (emoji) =>
+    sock.sendMessage(jid, { react: { text: emoji, key: message.key } }).catch(() => {});
+
   console.log(`[cmd]   _isOwner: ${message._isOwner}`);
+
+  // ── Per-category reaction emoji ──────────────────────────
+  // Sent as soon as the command is recognised, so the user gets instant
+  // visual feedback that the bot received and is processing their request.
+  const CATEGORY_EMOJI = {
+    downloader: '⏬', audio:    '🎵', ai:       '🤖',
+    fun:        '😄', games:    '🎮', group:    '👥',
+    general:    'ℹ️', economy:  '💰', owner:    '👑',
+    search:     '🔍', converter:'🔄', tools:    '🔧',
+    utility:    '⚙️', admin:    '🛡️', movies:   '🎬',
+    anime:      '🎌', sports:   '⚽', religion: '📖',
+    canvas:     '🎨',
+  };
+  const categoryEmoji = CATEGORY_EMOJI[cmd.category] || '⚡';
+  message._react(categoryEmoji);
 
   // ── Execute ─────────────────────────────────────────────
   console.log(`[cmd]   calling cmd.exec for .${command}...`);
   try {
     await cmd.exec(args, sock, jid, isGroup, sender, message, botConfig);
     console.log(`[cmd]   .${command} exec completed OK`);
+    // ✅ reaction signals success; replaces the in-progress emoji
+    message._react('✅');
   } catch (err) {
     console.error(`[cmd]   .${command} THREW:\n${err.stack || err.message}`);
+    message._react('❌');
     await sock.sendMessage(jid, {
       text: `❌ Error in .${command}: ${err.message}`
     }).catch(e2 => console.error('[cmd]   sendMessage (error reply) also failed:', e2.stack || e2.message));
