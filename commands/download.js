@@ -317,7 +317,8 @@ async function gogoExtractStreamUrl(embedUrl) {
 }
 
 // Parse every server option ("player-type-link") listed on an episode page,
-// regardless of attribute order in the markup.
+// regardless of attribute order in the markup. Also captures the `key` and
+// `subtitle` attributes added in the 2025 page redesign.
 function gogoParseServerBlocks(html) {
   const blocks = html.split(/<li class='player-type-link/).slice(1);
   return blocks.map(block => {
@@ -326,32 +327,38 @@ function gogoParseServerBlocks(html) {
       return m ? m[1] : '';
     };
     return {
-      type: attr('type'),
-      enc1: attr('encrypted-url1'),
-      enc2: attr('encrypted-url2'),
-      enc3: attr('encrypted-url3'),
+      type:     attr('type'),
+      enc1:     attr('encrypted-url1'),
+      enc2:     attr('encrypted-url2'),
+      enc3:     attr('encrypted-url3'),
       plainUrl: attr('plain-url'),
+      key:      attr('key'),
+      subtitle: attr('subtitle'),
     };
   }).filter(b => b.type);
 }
 
-// Some server types (e.g. "Blogger") aren't a plain URL — the page's own
-// client-side JS resolves them via an AJAX call to 9animetv.be's player.php,
-// which forwards the encrypted blob and returns an iframe. That iframe
-// sometimes points at a working resolver ("n-bg/player.php", which returns a
-// real googlevideo.com direct link) and sometimes at "histream/play.php",
-// which is broken on the provider's own server (always 500s, even on
-// garbage input) — those are skipped rather than retried.
+// Resolve one AJAX-based server (Blogger, hianime, etc.) via 9animetv.be's
+// player.php. Returns a playable URL or null.
+//
+// Known dead paths (skipped immediately to save round-trips):
+//   /histream/play.php — returns HTTP 500 unconditionally on the provider's
+//   own server; not fixable client-side (confirmed repeatedly as of 2025-07).
 async function gogoResolveAjaxServer(server, featureImage, postId) {
   const params = {
     [server.type]: server.enc1,
-    url2: server.enc2,
-    url3: server.enc3,
+    url2:          server.enc2,
+    url3:          server.enc3,
     feature_image: featureImage,
-    user_agent: GOGO_UA,
-    ref: 'gogoanime.by',
+    user_agent:    GOGO_UA,
+    ref:           'gogoanime.by',
     postId,
   };
+  // Pass key + subtitle when present — the PHP may use them to choose a
+  // different resolver branch (added to the page JS in 2025).
+  if (server.key)      params.key      = server.key;
+  if (server.subtitle) params.subtitle = server.subtitle;
+
   const { data: playerHtml } = await axios.get(
     'https://9animetv.be/wp-content/plugins/video-player/includes/player/player.php',
     { params, timeout: 20000, headers: { Referer: `${GOGO_BASE}/` } }
@@ -359,45 +366,95 @@ async function gogoResolveAjaxServer(server, featureImage, postId) {
   const iframeMatch = (playerHtml + '').match(/<iframe src="([^"]+)"/);
   if (!iframeMatch) return null;
   let iframeSrc = iframeMatch[1].replace(/&amp;/g, '&');
-  if (iframeSrc.startsWith('/')) iframeSrc = 'https://9animetv.be' + iframeSrc; // some resolvers (e.g. gogo-stream) return a relative path
-  if (iframeSrc.includes('/histream/')) return null; // known-broken resolver
+  if (iframeSrc.startsWith('/')) iframeSrc = 'https://9animetv.be' + iframeSrc;
+  if (iframeSrc.includes('/histream/')) return null; // known HTTP-500 dead end
   const { data: resolvedHtml } = await axios.get(iframeSrc, {
     timeout: 20000, headers: { Referer: 'https://9animetv.be/', 'User-Agent': GOGO_UA }
   });
   const html = resolvedHtml + '';
-  if (/no available video source/i.test(html)) return null; // resolver has nothing for this episode
+  if (/no available video source/i.test(html)) return null;
   return extractPlayableUrlFromHtml(html);
 }
 
 // Try every server listed on an episode page until one yields a real
-// direct video URL. Fast path first (embed/kiwi ship a plain iframe URL
-// that resolves in one hop); AJAX-based servers (e.g. Blogger) are tried
-// after, since they cost an extra network round-trip per attempt.
+// direct video URL.
+//
+// Fast path: embed/kiwi servers carry a plain iframe URL — resolve in one hop.
+// AJAX path: Blogger/hianime etc. go through 9animetv.be player.php.
+//
+// Page-metadata extraction (featureImage, postId, key, subtitle) uses the
+// `const default*` JS constants introduced in the 2025 page redesign. The old
+// regex looked for inline loadPlayer("...", ...) which no longer appears.
 async function gogoResolvePlayableUrl(episodePageUrl) {
-  const html = await gogoGet(episodePageUrl);
+  const html    = await gogoGet(episodePageUrl);
   const servers = gogoParseServerBlocks(html);
 
+  // ── Fast path: direct iframe (embed / kiwi) ──────────────────────────────
   const direct = servers.filter(s => (s.type === 'embed' || s.type === 'kiwi') && s.plainUrl);
   for (const s of direct) {
     const streamUrl = await gogoExtractStreamUrl(s.plainUrl).catch(() => null);
     if (streamUrl) return streamUrl;
   }
 
-  const featureMatch = html.match(/loadPlayer\(\s*type,\s*enc1,\s*enc2,\s*enc3,\s*"([^"]+)"/);
-  const postIdMatch = html.match(/"(\d+)",\s*plainUrl\s*\)/);
-  if (!featureMatch || !postIdMatch) return null;
-  const featureImage = featureMatch[1];
-  const postId = postIdMatch[1];
+  // ── AJAX path: extract page-level metadata from const default* variables ──
+  // The 2025 page redesign stores these as JS constants rather than inline
+  // arguments, so the old loadPlayer("...", enc1, enc2...) regex no longer works.
+  const featureImage = (html.match(/const\s+defaultFeatureImage\s*=\s*"([^"]*)"/) || [])[1] || '';
+  const postId       = (html.match(/const\s+defaultPostId\s*=\s*"(\d+)"/)         || [])[1] || '';
+  const pageKey      = (html.match(/const\s+defaultKey\s*=\s*"([^"]*)"/)          || [])[1] || '';
+  const subtitleUrl  = (html.match(/const\s+defaultSubtitleUrl\s*=\s*"([^"]*)"/)  || [])[1] || '';
+
+  if (!postId) {
+    // Fallback: old-style postId pattern in case the page hasn't been updated
+    const old = (html.match(/"(\d+)",\s*plainUrl\s*\)/) || [])[1];
+    if (!old) return null; // can't construct the AJAX params
+  }
 
   const ajaxServers = servers.filter(s => s.type !== 'embed' && s.type !== 'kiwi' && s.enc1);
   for (const s of ajaxServers) {
-    const streamUrl = await gogoResolveAjaxServer(s, featureImage, postId).catch(() => null);
+    // Merge page-level key/subtitle into the per-server block (server block
+    // values take precedence if present, otherwise fall back to page defaults)
+    const merged = {
+      ...s,
+      key:      s.key      || pageKey,
+      subtitle: s.subtitle || subtitleUrl,
+    };
+    const streamUrl = await gogoResolveAjaxServer(merged, featureImage, postId).catch(() => null);
     if (streamUrl) return streamUrl;
   }
   return null;
 }
 
+// Last-resort: try yt-dlp on the episode page. yt-dlp's generic extractor
+// won't always succeed on JS-rendered anime pages, but it costs nothing to
+// try after all scraping paths have failed.
+async function gogoYtDlpFallback(episodePageUrl) {
+  if (!(await ytDlpAvailable())) return null;
+  const outBase = tmpFile('');
+  try {
+    await execFileAsync('yt-dlp', [
+      '-f', 'best[height<=720][ext=mp4]/best[height<=720]/best[ext=mp4]/best',
+      '-o', `${outBase}.%(ext)s`,
+      '--no-playlist',
+      '--max-filesize', '90m',
+      episodePageUrl,
+    ], { timeout: 60000 });
+    const dir   = path.dirname(outBase);
+    const base  = path.basename(outBase);
+    const found = fs.readdirSync(dir).find(f => f.startsWith(base) && f !== base);
+    return found ? path.join(dir, found) : null;
+  } catch {
+    return null;
+  }
+}
+
 // Full pipeline: title + episode number → direct video URL + metadata.
+//
+// Returns { title, episodeNum, episodeUrl, streamUrl } on the happy path.
+// When the scraper path finds no working server (e.g. every server on the
+// page routes through histream which is dead), we try yt-dlp on the episode
+// page as a last resort. On yt-dlp success the result has streamUrl: null
+// and localFile: <tempFilePath>; the caller must delete localFile.
 async function gogoDownloadEpisode(title, episodeNum) {
   const series = await gogoSearchSeries(title);
   if (!series) throw new Error(`No anime found matching "${title}"`);
@@ -405,7 +462,17 @@ async function gogoDownloadEpisode(title, episodeNum) {
   if (!episodeUrl) throw new Error(`Episode ${episodeNum} not found for "${series.title}"`);
   const streamUrl = await gogoResolvePlayableUrl(episodeUrl);
   if (!streamUrl) {
-    const err = new Error(`No auto-downloadable server for this episode. Watch it manually: ${episodeUrl}`);
+    // All scraper paths failed (most commonly: episode only has hianime
+    // servers and histream.php is dead). Try yt-dlp as a last resort.
+    console.log(`${ANIME_LOG_PREFIX} scraper found no stream for "${series.title}" ep${episodeNum} — trying yt-dlp fallback`);
+    const localFile = await gogoYtDlpFallback(episodeUrl);
+    if (localFile) {
+      return { title: series.title, episodeNum, episodeUrl, streamUrl: null, localFile };
+    }
+    const err = new Error(
+      `No download server is currently available for this episode.\n` +
+      `Watch it online instead: ${episodeUrl}`
+    );
     err.episodeUrl = episodeUrl;
     throw err;
   }
@@ -855,7 +922,7 @@ const downloadCommands = {
 
   // ── TikTok ──────────────────────────────────────────────
   tiktok: {
-    category: 'downloader', desc: 'Download TikTok video without watermark',
+    category: 'downloader', reaction: '🎵', desc: 'Download TikTok video without watermark',
     usage: '.tiktok <url>', aliases: ['tt'], permissions: 'all',
     examples: ['.tiktok https://vm.tiktok.com/xxx'],
     exec: async (args, sock, jid) => {
@@ -879,7 +946,7 @@ const downloadCommands = {
 
   // ── Facebook ────────────────────────────────────────────
   facebook: {
-    category: 'downloader', desc: 'Download Facebook video',
+    category: 'downloader', reaction: '📘', desc: 'Download Facebook video',
     usage: '.facebook <url>', aliases: ['fb'], permissions: 'all',
     examples: ['.facebook https://fb.com/video/...'],
     exec: async (args, sock, jid) => {
@@ -910,7 +977,7 @@ const downloadCommands = {
 
   // ── Instagram ────────────────────────────────────────────
   instagram: {
-    category: 'downloader', desc: 'Download Instagram photo or video',
+    category: 'downloader', reaction: '📸', desc: 'Download Instagram photo or video',
     usage: '.instagram <url>', aliases: ['ig', 'igdl'], permissions: 'all',
     examples: ['.instagram https://www.instagram.com/p/xxx'],
     exec: async (args, sock, jid) => {
@@ -943,7 +1010,7 @@ const downloadCommands = {
 
   // ── Twitter / X ──────────────────────────────────────────
   twitter: {
-    category: 'downloader', desc: 'Download Twitter / X video',
+    category: 'downloader', reaction: '🐦', desc: 'Download Twitter / X video',
     usage: '.twitter <url>', aliases: ['x', 'xvideo'], permissions: 'all',
     examples: ['.twitter https://twitter.com/user/status/xxx'],
     exec: async (args, sock, jid) => {
@@ -964,7 +1031,7 @@ const downloadCommands = {
 
   // ── YouTube MP3 ──────────────────────────────────────────
   ytmp3: {
-    category: 'downloader', desc: 'Download YouTube audio (MP3)',
+    category: 'downloader', reaction: '🎵', desc: 'Download YouTube audio (MP3)',
     usage: '.ytmp3 <url>', aliases: [], permissions: 'all',
     examples: ['.ytmp3 https://youtu.be/xxx'],
     exec: async (args, sock, jid) => {
@@ -996,7 +1063,7 @@ const downloadCommands = {
 
   // ── YouTube MP4 ──────────────────────────────────────────
   ytmp4: {
-    category: 'downloader', desc: 'Download YouTube video (MP4)',
+    category: 'downloader', reaction: '🎬', desc: 'Download YouTube video (MP4)',
     usage: '.ytmp4 <url>', aliases: [], permissions: 'all',
     examples: ['.ytmp4 https://youtu.be/xxx'],
     exec: async (args, sock, jid) => {
@@ -1034,7 +1101,7 @@ const downloadCommands = {
 
   // ── Song search (query → YouTube audio) ─────────────────
   song: {
-    category: 'downloader', desc: 'Search and download a song by name',
+    category: 'downloader', reaction: '🎵', desc: 'Search and download a song by name',
     usage: '.song <song name>', aliases: [], permissions: 'all',
     examples: ['.song Blinding Lights', '.song Bohemian Rhapsody'],
     exec: async (args, sock, jid) => {
@@ -1072,7 +1139,7 @@ const downloadCommands = {
   },
 
   play: {
-    category: 'downloader', desc: 'Search YouTube and play music',
+    category: 'downloader', reaction: '🎵', desc: 'Search YouTube and play music',
     usage: '.play <song name>', aliases: [], permissions: 'all',
     examples: ['.play Shape of You', '.play Despacito'],
     exec: async (args, sock, jid) => downloadCommands.song.exec(args, sock, jid)
@@ -1080,7 +1147,7 @@ const downloadCommands = {
 
   // ── Video search (query → YouTube video) ─────────────────
   video: {
-    category: 'downloader', desc: 'Search and download a video by name',
+    category: 'downloader', reaction: '🎬', desc: 'Search and download a video by name',
     usage: '.video <title>', aliases: [], permissions: 'all',
     examples: ['.video funny cats compilation'],
     exec: async (args, sock, jid) => {
@@ -1118,7 +1185,7 @@ const downloadCommands = {
 
   // ── Spotify ────────────────────────────────────────────────
   spotify: {
-    category: 'downloader', desc: 'Get Spotify track info and download audio',
+    category: 'downloader', reaction: '🎧', desc: 'Get Spotify track info and download audio',
     usage: '.spotify <url or song name>', aliases: [], permissions: 'all',
     examples: ['.spotify https://open.spotify.com/track/xxx', '.spotify Blinding Lights The Weeknd'],
     exec: async (args, sock, jid) => {
@@ -1164,7 +1231,7 @@ const downloadCommands = {
   // ⚠️ Scrapes a piracy mirror (gogoanime.by) — no legal/official API exists
   // for full anime episode downloads. Expect this to break if the site changes.
   animedl: {
-    category: 'downloader', desc: 'Download a full anime episode (via GogoAnime)',
+    category: 'downloader', reaction: '🎌', desc: 'Download a full anime episode (via GogoAnime)',
     usage: '.animedl <anime title> | <episode number>', aliases: ['anime', 'animedownload'], permissions: 'all',
     examples: ['.animedl Demon Slayer | 1', '.animedl Naruto Shippuuden | 1'],
     exec: async (args, sock, jid) => {
@@ -1190,30 +1257,33 @@ const downloadCommands = {
         const episodeLabel = `${result.title} ep${result.episodeNum}`;
         const caption = `🎌 *${result.title}*\n📺 Episode ${result.episodeNum}\n\n_Source: gogoanime mirror — unofficial._`;
 
-        // Never log or forward the raw (expiring) stream URL to users
-        console.log(`${ANIME_LOG_PREFIX} resolved "${episodeLabel}" — stream URL classified next`);
+        console.log(`${ANIME_LOG_PREFIX} resolved "${episodeLabel}"`);
         await sock.sendMessage(jid, {
           text: `✅ Found! *${result.title}* — Episode ${result.episodeNum}\n\n⏳ Starting download...`
         });
 
         // ── Step 2: download to local temp file with progress ────────────────
-        let lastReportedStep = -1;
-        tempFile = await prepareAnimeVideoFile(result.streamUrl, {
-          label: episodeLabel,
-          onProgress: async (pct, downloaded, total) => {
-            // Deduplicate — prepareAnimeVideoFile may call us for the same
-            // step if chunk boundaries align awkwardly
-            if (pct <= lastReportedStep) return;
-            lastReportedStep = pct;
-            console.log(
-              `${ANIME_LOG_PREFIX} [${episodeLabel}] download progress` +
-              ` ${pct}% (${formatBytes(downloaded)} / ${formatBytes(total)})`
-            );
-            await sock.sendMessage(jid, {
-              text: `⏬ Downloading... ${pct}% — ${formatBytes(downloaded)} / ${formatBytes(total)}`
-            });
-          },
-        });
+        if (result.localFile) {
+          // yt-dlp fallback already saved the file — use it directly
+          tempFile = result.localFile;
+          console.log(`${ANIME_LOG_PREFIX} [${episodeLabel}] using yt-dlp fallback file: ${tempFile}`);
+        } else {
+          let lastReportedStep = -1;
+          tempFile = await prepareAnimeVideoFile(result.streamUrl, {
+            label: episodeLabel,
+            onProgress: async (pct, downloaded, total) => {
+              if (pct <= lastReportedStep) return;
+              lastReportedStep = pct;
+              console.log(
+                `${ANIME_LOG_PREFIX} [${episodeLabel}] download progress` +
+                ` ${pct}% (${formatBytes(downloaded)} / ${formatBytes(total)})`
+              );
+              await sock.sendMessage(jid, {
+                text: `⏬ Downloading... ${pct}% — ${formatBytes(downloaded)} / ${formatBytes(total)}`
+              });
+            },
+          });
+        }
 
         // ── Step 3: upload to WhatsApp via ReadStream (not buffer) ───────────
         const { size } = fs.statSync(tempFile);
@@ -1234,7 +1304,6 @@ const downloadCommands = {
         console.log(`${ANIME_LOG_PREFIX} [${episodeLabel}] upload completed`);
 
       } catch (err) {
-        // Always report the exact failure reason — never a generic "something went wrong"
         console.error(`${ANIME_LOG_PREFIX} failed for "${titlePart}" ep${episodeNum}:`, err.message);
         await sock.sendMessage(jid, {
           text: `❌ Anime download failed: ${err.message}`
@@ -1255,7 +1324,7 @@ const downloadCommands = {
 
   // ── MediaFire ─────────────────────────────────────────────
   mediafire: {
-    category: 'downloader', desc: 'Download file from MediaFire',
+    category: 'downloader', reaction: '📁', desc: 'Download file from MediaFire',
     usage: '.mediafire <url>', aliases: ['mf'], permissions: 'all',
     examples: ['.mediafire https://www.mediafire.com/file/xxx'],
     exec: async (args, sock, jid) => {

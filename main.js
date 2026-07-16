@@ -1098,16 +1098,22 @@ async function handleCommand(command, args, message, sock, botConfig) {
     anime:      '🎌', sports:   '⚽', religion: '📖',
     canvas:     '🎨',
   };
-  const categoryEmoji = CATEGORY_EMOJI[cmd.category] || '⚡';
-  message._react(categoryEmoji);
+  // Use the command's own reaction emoji if defined, otherwise fall back to
+  // the category emoji. This lets each command signal exactly what it does
+  // (🎌 for animedl, 🎵 for song, 🎬 for yt, etc.) rather than a generic
+  // category icon. The reaction is sent once and never updated on success —
+  // the user sees the command-specific emoji for the lifetime of the message.
+  const cmdEmoji = cmd.reaction || CATEGORY_EMOJI[cmd.category] || '⚡';
+  message._react(cmdEmoji);
 
   // ── Execute ─────────────────────────────────────────────
   console.log(`[cmd]   calling cmd.exec for .${command}...`);
   try {
     await cmd.exec(args, sock, jid, isGroup, sender, message, botConfig);
     console.log(`[cmd]   .${command} exec completed OK`);
-    // ✅ reaction signals success; replaces the in-progress emoji
-    message._react('✅');
+    // Intentionally NOT updating the reaction to ✅ — the command-specific
+    // emoji already tells the user what was done; overwriting it with ✅
+    // removes that context.
   } catch (err) {
     console.error(`[cmd]   .${command} THREW:\n${err.stack || err.message}`);
     message._react('❌');
