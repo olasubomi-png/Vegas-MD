@@ -195,14 +195,30 @@ const ownerCommands = {
     exec: ownerOnly(async (args, sock, jid) => {
       const sub = (args[0] || '').toLowerCase();
       if (sub !== 'on' && sub !== 'off') {
-        const cur = db.getSetting('autoStatusReact', false);
+        const cur      = db.getSetting('autoStatusReact', false);
+        const viewOn   = db.getSetting('autoStatus', false);
         return sock.sendMessage(jid, {
-          text: `❤️ Auto-Status React is currently *${cur ? 'ON' : 'OFF'}*.\n\nUsage: *.autostatusreact on* or *.autostatusreact off*`
+          text:
+            `❤️ *Auto-Status React: ${cur ? 'ON ✅' : 'OFF ❌'}*\n` +
+            `👁️ Auto-Status (view): ${viewOn ? 'ON ✅' : 'OFF ❌'}\n\n` +
+            `_Note: Auto-Status viewing must be ON for reactions to fire._\n\n` +
+            `Usage: *.autostatusreact on* or *.autostatusreact off*`
         });
       }
       const v = sub === 'on';
       db.setSetting('autoStatusReact', v);
-      await sock.sendMessage(jid, { text: `❤️ Auto-Status React: ${v ? '✅ Enabled' : '❌ Disabled'}` });
+      // Reacting to a status requires the bot to view it first.
+      // Auto-enable autoStatus when turning reactions on so both work together.
+      if (v && !db.getSetting('autoStatus', false)) {
+        db.setSetting('autoStatus', true);
+        await sock.sendMessage(jid, {
+          text:
+            `❤️ Auto-Status React: ✅ Enabled\n` +
+            `👁️ Auto-Status (view) also enabled automatically — both must be on for reactions to work.`
+        });
+      } else {
+        await sock.sendMessage(jid, { text: `❤️ Auto-Status React: ${v ? '✅ Enabled' : '❌ Disabled'}` });
+      }
     })
   },
 
@@ -426,9 +442,9 @@ const ownerCommands = {
   },
 
   restore: {
-    category: 'owner', desc: 'List available database backups',
-    usage: '.restore', aliases: [], permissions: 'owner',
-    examples: ['.restore'],
+    category: 'owner', desc: 'List or restore database backups',
+    usage: '.restore [number]', aliases: [], permissions: 'owner',
+    examples: ['.restore', '.restore 1'],
     exec: ownerOnly(async (args, sock, jid) => {
       const dataDir = path.join(__dirname, '../data');
       const backups = fs.readdirSync(dataDir)
@@ -437,28 +453,79 @@ const ownerCommands = {
       if (!backups.length) {
         return sock.sendMessage(jid, { text: '❌ No backups found.\n\nUse *.backup* to create one.' });
       }
+
       const list = backups.map((f, i) => {
         const ts = parseInt(f.replace('database_backup_', '').replace('.json', ''), 10);
         return `${i + 1}. ${new Date(ts).toLocaleString()} — ${Math.round(fs.statSync(path.join(dataDir, f)).size / 1024)} KB`;
       }).join('\n');
-      await sock.sendMessage(jid, {
-        text: `📂 *Available Backups*\n\n${list}\n\n_To restore manually, replace database.json with the backup file._`
-      });
+
+      const choice = parseInt(args[0], 10);
+      if (!choice) {
+        // No argument — just list them
+        return sock.sendMessage(jid, {
+          text: `📂 *Available Backups*\n\n${list}\n\n_Send *.restore <number>* to restore that backup._`
+        });
+      }
+
+      if (choice < 1 || choice > backups.length) {
+        return sock.sendMessage(jid, { text: `❌ Invalid choice. Pick a number from 1 to ${backups.length}.` });
+      }
+
+      const chosen   = backups[choice - 1];
+      const bakPath  = path.join(dataDir, chosen);
+      const dbPath   = path.join(dataDir, 'database.json');
+      const safePath = path.join(dataDir, `database_pre_restore_${Date.now()}.json`);
+
+      try {
+        // Save current DB as a safety backup first
+        if (fs.existsSync(dbPath)) fs.copyFileSync(dbPath, safePath);
+        // Overwrite live DB with chosen backup
+        fs.copyFileSync(bakPath, dbPath);
+        // Reload the in-memory singleton from the restored file
+        db.data = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
+        await sock.sendMessage(jid, {
+          text:
+            `✅ *Database Restored*\n\n` +
+            `📁 Restored from: ${chosen}\n` +
+            `💾 Old DB saved as: ${path.basename(safePath)}\n\n` +
+            `_The bot is now using the restored database. Run *.restart* to fully reload._`
+        });
+      } catch (err) {
+        await sock.sendMessage(jid, { text: `❌ Restore failed: ${err.message}` });
+      }
     })
   },
 
   clearsession: {
     category: 'owner', desc: 'Clear WhatsApp auth session (forces re-login)',
-    usage: '.clearsession', aliases: [], permissions: 'owner',
-    examples: ['.clearsession'],
+    usage: '.clearsession [confirm]', aliases: [], permissions: 'owner',
+    examples: ['.clearsession', '.clearsession confirm'],
     exec: ownerOnly(async (args, sock, jid) => {
+      const confirm = (args[0] || '').toLowerCase() === 'confirm';
+      if (!confirm) {
+        return sock.sendMessage(jid, {
+          text:
+            `⚠️ *Clear Session*\n\n` +
+            `This will delete *auth_info_baileys/* and restart the bot.\n` +
+            `You will need to re-pair with a new pairing code.\n\n` +
+            `Send *.clearsession confirm* to proceed.`
+        });
+      }
       await sock.sendMessage(jid, {
-        text:
-          `⚠️ *Clear Session*\n\n` +
-          `This will delete *auth_info_baileys/* and restart the bot.\n` +
-          `You will need to re-pair with a new pairing code.\n\n` +
-          `Send *.clearsession confirm* to proceed.`
+        text: `🗑️ Clearing session files and restarting...`
       });
+      // Give WhatsApp a moment to deliver the message before we exit
+      setTimeout(() => {
+        try {
+          const authDir = path.join(__dirname, '../auth_info_baileys');
+          if (fs.existsSync(authDir)) {
+            fs.rmSync(authDir, { recursive: true, force: true });
+          }
+        } catch (e) {
+          console.error('[clearsession] rmdir error:', e.message);
+        }
+        process.exit(1); // exit 1 → process manager / Replit workflow will restart
+      }, 2000);
     })
   },
 
