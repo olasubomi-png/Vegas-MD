@@ -238,6 +238,16 @@ global.botStartTime = Date.now();
 global.botConfig    = botConfig;
 global.db           = db;
 
+// ─── ZST Labs API key check ───────────────────────────────────────────────────
+// Canvas, Sports, Religion, Movies, Anime and many other ZST Labs commands all
+// read this key via plugins/zstlab.js.  Log clearly at startup so operators can
+// see whether these categories will work without having to trigger a command.
+if (process.env.ZST_API_KEY) {
+  console.log('[ZST Labs] ✅ ZST_API_KEY is set — canvas, sports, religion, movies, anime commands are active.');
+} else {
+  console.warn('[ZST Labs] ⚠️  ZST_API_KEY is not set — canvas, sports, religion, movies, anime commands will return 401. Add ZST_API_KEY to Replit Secrets (https://zstlab.cyou).');
+}
+
 // ─── WA protocol version cache ────────────────────────────────────────────────
 // Fetching inside connect() on every reconnect adds a live network round-trip
 // that is especially dangerous during mid-pairing reconnects (the handshake
