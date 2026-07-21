@@ -851,15 +851,23 @@ function attachHandlers(sock, saveCreds) {
           }
 
           if (!text.startsWith(prefix)) {
-            // ── Permanent font: auto-echo non-command text in the user's saved font ──
-            // Only fires in DMs (not groups) so groups aren't spammed with echoes.
-            if (isFromMe && text && !isJidGroup(jid)) {
+            // ── Permanent font: auto-apply each user's saved font to non-command text ──
+            // • isFromMe in DMs  → echo converted text (appears inline in the chat)
+            // • Any other user   → reply to their message with the converted text,
+            //   works in both DMs and groups so everyone's saved font is applied.
+            if (text) {
               try {
                 const fontUser = db.getUser(sender);
                 if (fontUser.fontStyle && fontUser.fontStyle > 0) {
                   const converted = applyFontStyle(text, fontUser.fontStyle);
                   if (converted && converted !== text) {
-                    sock.sendMessage(jid, { text: converted }).catch(() => {});
+                    if (isFromMe && !isJidGroup(jid)) {
+                      // Owner's own DM message: echo so the styled version appears in chat
+                      sock.sendMessage(jid, { text: converted }).catch(() => {});
+                    } else if (!isFromMe) {
+                      // Any user with a saved font: reply with their text in their font style
+                      sock.sendMessage(jid, { text: converted, quoted: message }).catch(() => {});
+                    }
                   }
                 }
               } catch (_) {}
