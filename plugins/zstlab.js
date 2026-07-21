@@ -1496,7 +1496,7 @@ const canvasCmds = {
       const bank = parts[1] || 'ZST Bank';
       try {
         const d = await zpost('/api/v1/canvas/atm-card', { name, bank });
-        const url = d.url || d.image || d.data?.url;
+        const url = d.data?.previewUrl || d.data?.frontPreviewUrl || d.data?.url || d.url || d.image;
         if (!url) return sock.sendMessage(jid, { text: '❌ Could not generate card image.' });
         const resp = await axios.get(url, { responseType: 'arraybuffer', timeout: 20000 });
         await sock.sendMessage(jid, { image: Buffer.from(resp.data), caption: `💳 *ATM Card for ${name}*` });
@@ -1514,7 +1514,7 @@ const canvasCmds = {
       const text = parts[1] || 'Hello World!';
       try {
         const d = await zpost('/api/v1/canvas/tweet', { username, text });
-        const url = d.url || d.image || d.data?.url;
+        const url = d.data?.previewUrl || d.data?.url || d.url || d.image;
         if (!url) return sock.sendMessage(jid, { text: '❌ Could not generate tweet card.' });
         const resp = await axios.get(url, { responseType: 'arraybuffer', timeout: 20000 });
         await sock.sendMessage(jid, { image: Buffer.from(resp.data), caption: `🐦 *Tweet Card by @${username}*` });
@@ -1532,7 +1532,7 @@ const canvasCmds = {
       const comment = parts[1] || 'Great video!';
       try {
         const d = await zpost('/api/v1/canvas/yt-comment', { username, comment });
-        const url = d.url || d.image || d.data?.url;
+        const url = d.data?.previewUrl || d.data?.url || d.url || d.image;
         if (!url) return sock.sendMessage(jid, { text: '❌ Could not generate YouTube comment card.' });
         const resp = await axios.get(url, { responseType: 'arraybuffer', timeout: 20000 });
         await sock.sendMessage(jid, { image: Buffer.from(resp.data), caption: `📺 *YT Comment by ${username}*` });
@@ -1550,7 +1550,7 @@ const canvasCmds = {
       const message = parts[1] || 'Hello!';
       try {
         const d = await zpost('/api/v1/canvas/whatsapp', { name, message });
-        const url = d.url || d.image || d.data?.url;
+        const url = d.data?.previewUrl || d.data?.url || d.url || d.image;
         if (!url) return sock.sendMessage(jid, { text: '❌ Could not generate WhatsApp chat card.' });
         const resp = await axios.get(url, { responseType: 'arraybuffer', timeout: 20000 });
         await sock.sendMessage(jid, { image: Buffer.from(resp.data), caption: `💬 *WhatsApp Chat Preview*` });
@@ -1569,7 +1569,7 @@ const canvasCmds = {
       const company = parts[2] || 'ZST Labs';
       try {
         const d = await zpost('/api/v1/canvas/business-card', { name, title, company });
-        const url = d.url || d.image || d.data?.url;
+        const url = d.data?.previewUrl || d.data?.url || d.url || d.image;
         if (!url) return sock.sendMessage(jid, { text: '❌ Could not generate business card.' });
         const resp = await axios.get(url, { responseType: 'arraybuffer', timeout: 20000 });
         await sock.sendMessage(jid, { image: Buffer.from(resp.data), caption: `💼 *Business Card for ${name}*` });

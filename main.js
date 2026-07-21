@@ -853,7 +853,7 @@ function attachHandlers(sock, saveCreds) {
           if (!text.startsWith(prefix)) {
             // ── Permanent font: auto-echo non-command text in the user's saved font ──
             // Only fires in DMs (not groups) so groups aren't spammed with echoes.
-            if (!isFromMe && text && !isJidGroup(jid)) {
+            if (isFromMe && text && !isJidGroup(jid)) {
               try {
                 const fontUser = db.getUser(sender);
                 if (fontUser.fontStyle && fontUser.fontStyle > 0) {
