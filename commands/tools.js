@@ -579,13 +579,16 @@ const toolsCommands = {
   },
 
   font: {
-    category: 'utility', desc: 'Convert text to fancy Unicode font styles',
-    usage: '.font <text>', aliases: ['fancy'], permissions: 'all',
-    examples: ['.font Hello World', '.font OLASUBOMI'],
-    exec: async (args, sock, jid) => {
-      if (!args.length) return sock.sendMessage(jid, { text: '❌ Usage: .font <your text>' });
-      const text = args.join(' ');
+    category: 'utility',
+    desc: 'Set your permanent font style or preview all styles. Use .font <1-10> to set, .font default to reset, .font <text> to convert.',
+    usage: '.font [number|default|text]',
+    aliases: ['fancy'],
+    permissions: 'all',
+    examples: ['.font', '.font 3', '.font default', '.font Hello World'],
+    exec: async (args, sock, jid, isGroup, sender) => {
+      const db = require('../lib/database');
 
+      // ── Unicode style converters ──────────────────────────────────
       const to = (base, baseUpper) => s => s.split('').map(c => {
         const code = c.charCodeAt(0);
         if (code >= 65 && code <= 90)  return String.fromCodePoint(code - 65 + baseUpper);
@@ -593,24 +596,87 @@ const toolsCommands = {
         return c;
       }).join('');
 
-      const bold      = to(0x1D41A, 0x1D400);
-      const italic    = to(0x1D44E, 0x1D434);
-      const script    = to(0x1D4EA, 0x1D4D0);
-      const fraktur   = to(0x1D586, 0x1D56C);
-      const doubleStr = to(0x1D552, 0x1D538);
+      const styles = [
+        { name: 'Bold',           fn: to(0x1D41A, 0x1D400) },  // 1
+        { name: 'Italic',         fn: to(0x1D44E, 0x1D434) },  // 2
+        { name: 'Script/Cursive', fn: to(0x1D4EA, 0x1D4D0) },  // 3
+        { name: 'Fraktur/Gothic', fn: to(0x1D586, 0x1D56C) },  // 4
+        { name: 'Double-Struck',  fn: to(0x1D552, 0x1D538) },  // 5
+        { name: 'Bold Italic',    fn: to(0x1D482, 0x1D468) },  // 6
+        { name: 'Monospace',      fn: to(0x1D68A, 0x1D670) },  // 7
+        { name: 'Sans-Serif',     fn: to(0x1D5BA, 0x1D5A0) },  // 8
+        { name: 'Sans Bold',      fn: to(0x1D5EE, 0x1D5D4) },  // 9
+        { name: 'Sans Italic',    fn: to(0x1D622, 0x1D608) },  // 10
+      ];
 
+      const SAMPLE = 'Hello';
+      const userJid = sender || jid;
+
+      // ── No args: show the full menu ───────────────────────────────
+      if (!args.length) {
+        const user = db.getUser(userJid);
+        const current = user.fontStyle || 0;
+        const currentLabel = current === 0
+          ? 'Plain (default)'
+          : `Font ${current} — ${styles[current - 1].name}`;
+        const lines = styles.map((s, i) =>
+          `*${i + 1}.* ${s.fn(SAMPLE)} — _${s.name}_`
+        ).join('\n');
+        return sock.sendMessage(jid, {
+          text:
+            `🔤 *Font Styles*\n\n${lines}\n\n` +
+            `📌 Your current font: *${currentLabel}*\n\n` +
+            `• *.font <1–10>* — set a permanent font\n` +
+            `• *.font default* — reset to plain\n` +
+            `• *.font <text>* — convert text with your current font`
+        });
+      }
+
+      const first = args[0].toLowerCase();
+
+      // ── .font default — reset ─────────────────────────────────────
+      if (first === 'default' || first === '0') {
+        db.updateUser(userJid, { fontStyle: 0 });
+        return sock.sendMessage(jid, { text: `🔤 Your font has been reset to *plain* (default).` });
+      }
+
+      // ── .font <number> — set permanent font ───────────────────────
+      const num = parseInt(first, 10);
+      if (!isNaN(num) && args.length === 1) {
+        if (num < 1 || num > styles.length) {
+          return sock.sendMessage(jid, {
+            text: `❌ Choose a font number between *1* and *${styles.length}*.\nType *.font* to see the full list.`
+          });
+        }
+        db.updateUser(userJid, { fontStyle: num });
+        const s = styles[num - 1];
+        return sock.sendMessage(jid, {
+          text:
+            `✅ *Font ${num} set permanently!*\n\n` +
+            `Style   : ${s.name}\n` +
+            `Preview : ${s.fn('Hello World')}\n\n` +
+            `_Your font stays active until you change it or type .font default_`
+        });
+      }
+
+      // ── .font <text> — convert using current saved font ───────────
+      const text = args.join(' ');
+      const user = db.getUser(userJid);
+      const savedStyle = user.fontStyle || 0;
+
+      if (savedStyle === 0) {
+        // No font set — show all conversions
+        const lines = styles.map((s, i) => `*${i + 1}.* ${s.fn(text)} — _${s.name}_`).join('\n');
+        return sock.sendMessage(jid, {
+          text:
+            `🔤 *"${text}"* in all styles:\n\n${lines}\n\n` +
+            `_Tip: use .font <1–${styles.length}> to set a permanent style_`
+        });
+      }
+
+      const s = styles[savedStyle - 1];
       await sock.sendMessage(jid, {
-        text:
-          `🔤 *Fancy Fonts* — _${text}_\n\n` +
-          `𝐁𝐨𝐥𝐝     : ${bold(text)}\n` +
-          `𝑰𝒕𝒂𝒍𝒊𝒄   : ${italic(text)}\n` +
-          `𝓢𝓬𝓻𝓲𝓹𝓽   : ${script(text)}\n` +
-          `𝔉𝔯𝔞𝔨𝔱𝔲𝔯  : ${fraktur(text)}\n` +
-          `𝔻𝕠𝕦𝕓𝕝𝕖  : ${doubleStr(text)}\n` +
-          `*WA Bold* : *${text}*\n` +
-          `_WA Italic_: _${text}_\n` +
-          `\`WA Mono\`: \`${text}\`\n` +
-          `~Strike~  : ~${text}~`
+        text: `${s.fn(text)}\n\n_Font ${savedStyle}: ${s.name}_`
       });
     }
   },

@@ -97,9 +97,10 @@ async function handleAntiDelete(sock, deletedKeys) {
       const settings = db.getGroup(chatJid);
       if (!settings.antiDelete) continue;
     } else {
-      // DMs: use global antiDelete setting
-      const globalAntiDelete = db.getSetting('antiDelete', null);
-      if (!globalAntiDelete) continue;
+      // DMs: respect the per-user antiDelete setting of the person we're chatting with.
+      // chatJid is the other person's JID — check if THEY have antiDelete enabled.
+      const dmUser = db.getUser(chatJid);
+      if (!dmUser.antiDelete) continue;
     }
 
     const senderNum = cached.sender.split('@')[0];

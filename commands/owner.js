@@ -171,21 +171,47 @@ const ownerCommands = {
   },
 
   autostatus: {
-    category: 'owner', desc: 'Turn auto-viewing of status updates on/off',
-    usage: '.autostatus <on|off>', aliases: [], permissions: 'owner',
-    examples: ['.autostatus on', '.autostatus off'],
-    exec: ownerOnly(async (args, sock, jid) => {
-      const sub = (args[0] || '').toLowerCase();
-      if (sub !== 'on' && sub !== 'off') {
-        const cur = db.getSetting('autoStatus', false);
-        return sock.sendMessage(jid, {
-          text: `👁️ Auto-Status is currently *${cur ? 'ON' : 'OFF'}*.\n\nUsage: *.autostatus on* or *.autostatus off*`
-        });
+    category: 'owner',
+    desc: 'Owner: toggle global auto-status on/off. Anyone in DM: toggle auto-view of your own status updates.',
+    usage: '.autostatus [on|off]',
+    aliases: [],
+    permissions: 'all',
+    examples: ['.autostatus on', '.autostatus off', '.autostatus'],
+    exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
+      const { resolveIsOwner } = require('../lib/helpers');
+      const isOwner = resolveIsOwner(message, sender, botConfig);
+
+      if (isOwner) {
+        // ── Owner: global on/off toggle (existing behaviour) ──────
+        const sub = (args[0] || '').toLowerCase();
+        if (sub !== 'on' && sub !== 'off') {
+          const cur = db.getSetting('autoStatus', false);
+          return sock.sendMessage(jid, {
+            text: `👁️ *Auto-Status (Global)*\nCurrently: *${cur ? 'ON ✅' : 'OFF ❌'}*\n\nUsage: *.autostatus on* or *.autostatus off*\n_Non-owners can also toggle their own status in a DM (no args)._`
+          });
+        }
+        const v = sub === 'on';
+        db.setSetting('autoStatus', v);
+        return sock.sendMessage(jid, { text: `👁️ Auto-Status (Global): ${v ? '✅ Enabled' : '❌ Disabled'}` });
       }
-      const v = sub === 'on';
-      db.setSetting('autoStatus', v);
-      await sock.sendMessage(jid, { text: `👁️ Auto-Status: ${v ? '✅ Enabled' : '❌ Disabled'}` });
-    })
+
+      // ── Non-owner in a group ───────────────────────────────────
+      if (isGroup) {
+        return sock.sendMessage(jid, { text: '🔒 Only the bot owner can change the global auto-status.\n\n_In a DM with the bot, you can toggle auto-view of your own statuses._' });
+      }
+
+      // ── Non-owner in DM: per-user toggle ──────────────────────
+      const user   = db.getUser(sender);
+      const newVal = !user.autoStatus;
+      db.updateUser(sender, { autoStatus: newVal });
+      return sock.sendMessage(jid, {
+        text:
+          `📺 *Auto-Status: ${newVal ? '✅ Enabled' : '❌ Disabled'}*\n\n` +
+          (newVal
+            ? `_The bot will automatically view your status updates when you post them._`
+            : `_The bot will no longer auto-view your status updates._`)
+      });
+    }
   },
 
   autostatusreact: {
@@ -352,19 +378,51 @@ const ownerCommands = {
   },
 
   antidelete: {
-    category: 'owner', desc: 'Toggle global anti-delete (DMs + any chat)',
-    usage: '.antidelete', aliases: [], permissions: 'owner',
+    category: 'owner',
+    desc: 'Owner: toggle global anti-delete. Group admins: toggle for the group. Anyone in DM: toggle for yourself.',
+    usage: '.antidelete',
+    aliases: [],
+    permissions: 'all',
     examples: ['.antidelete'],
-    exec: ownerOnly(async (args, sock, jid) => {
-      const v = !db.getSetting('antiDelete', false);
-      db.setSetting('antiDelete', v);
-      await sock.sendMessage(jid, {
-        text: `🗑️ *Global Anti-Delete:* ${v ? '✅ Enabled' : '❌ Disabled'}\n\n` +
-              (v
-                ? '_Bot will reveal deleted messages in DMs and all chats._\n_For groups, also run .antidelete inside the group._'
-                : '_Anti-delete is now off globally._')
+    exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
+      const { resolveIsOwner, isGroupAdmin } = require('../lib/helpers');
+      const isOwner = resolveIsOwner(message, sender, botConfig);
+
+      if (isGroup) {
+        // ── Group: require admin, toggle per-group setting ────────
+        const senderIsAdmin = isOwner || await isGroupAdmin(sock, jid, sender);
+        if (!senderIsAdmin) {
+          return sock.sendMessage(jid, { text: '❌ Only group admins can toggle anti-delete for this group.' });
+        }
+        const val = db.toggleGroup(jid, 'antiDelete');
+        return sock.sendMessage(jid, { text: `🗑️ Anti-Delete (Group): ${val ? '✅ Enabled' : '❌ Disabled'}` });
+      }
+
+      if (isOwner) {
+        // ── Owner in DM: toggle global setting ───────────────────
+        const v = !db.getSetting('antiDelete', false);
+        db.setSetting('antiDelete', v);
+        return sock.sendMessage(jid, {
+          text:
+            `🗑️ *Global Anti-Delete: ${v ? '✅ Enabled' : '❌ Disabled'}*\n\n` +
+            (v
+              ? `_Monitors DMs for everyone who has also enabled it._\n_Also run .antidelete inside any group to enable it there._`
+              : `_Global anti-delete is now off._`)
+        });
+      }
+
+      // ── Regular user in DM: per-user toggle ───────────────────
+      const user   = db.getUser(sender);
+      const newVal = !user.antiDelete;
+      db.updateUser(sender, { antiDelete: newVal });
+      return sock.sendMessage(jid, {
+        text:
+          `🗑️ *Anti-Delete: ${newVal ? '✅ Enabled' : '❌ Disabled'}*\n\n` +
+          (newVal
+            ? `_If someone deletes a message in our chat, you'll be notified._`
+            : `_You won't be notified of deleted messages in our chat._`)
       });
-    })
+    }
   },
 
   addbalance: {

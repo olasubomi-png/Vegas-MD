@@ -421,15 +421,17 @@ const groupCommands = {
     }
   },
 
-  // ─── Simple toggles ───────────────────────────────────────
-  welcome:       makeToggle('welcome',      'Welcome messages', '👋'),
-  goodbye:       makeToggle('goodbye',      'Goodbye messages', '🚪'),
-  antidelete:    makeToggle('antiDelete',   'Anti-delete',      '🗑️'),
-  antispam:      makeToggle('antiSpam',     'Anti-spam',        '🚨'),
-  antiviewonce:  makeToggle('antiViewOnce', 'Anti-view-once',   '👁️'),
-  autoreact:     makeToggle('autoReact',    'Auto-react',       '❤️'),
-  antichannel:   makeToggle('antiChannel',  'Anti-channel link','📢'),
-  antistatus:    makeToggle('antiStatus',   'Anti-status forward','📵'),
+  // ─── Simple group-only toggles ────────────────────────────
+  welcome:      makeToggle('welcome',      'Welcome messages',       '👋'),
+  goodbye:      makeToggle('goodbye',      'Goodbye messages',       '🚪'),
+  antispam:     makeToggle('antiSpam',     'Anti-spam',              '🚨'),
+  antiviewonce: makeToggle('antiViewOnce', 'Anti-view-once',         '👁️'),
+  autoreact:    makeToggle('autoReact',    'Auto-react',             '❤️'),
+  antichannel:  makeToggle('antiChannel',  'Anti-channel link',      '📢'),
+  antistatus:   makeToggle('antiStatus',   'Anti-status forward',    '📵'),
+
+  // NOTE: antidelete and autostatus are defined in commands/owner.js (loaded after this
+  // file) so they handle all contexts: owner global, group admin, and DM per-user.
 
   // ─── Antilink (on / off / set <action> / status) ─────────
   antilink: {

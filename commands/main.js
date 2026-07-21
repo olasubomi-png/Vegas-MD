@@ -285,7 +285,7 @@ const mainCommands = {
     examples:    ['.ping'],
     exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
       const t0  = Date.now();
-      await sock.sendMessage(jid, { text: '🏓 Pinging...' });
+      await sock.sendMessage(jid, { text: 'pong' });
       _lastPing = Date.now() - t0;
 
       const cfg     = botConfig || global.botConfig || {};
