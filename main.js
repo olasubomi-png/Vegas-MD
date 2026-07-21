@@ -204,6 +204,7 @@ if (process.env.DASHBOARD_API_ENABLED !== 'false') {
   }
 }
 const { normalizeJid, getMessageText, resolveIsOwner } = require('./lib/helpers');
+const { applyFontStyle } = require('./lib/font');
 const { handleParticipantUpdate } = require('./events/welcome');
 const {
   cacheMessage,
@@ -850,6 +851,19 @@ function attachHandlers(sock, saveCreds) {
           }
 
           if (!text.startsWith(prefix)) {
+            // ── Permanent font: auto-echo non-command text in the user's saved font ──
+            // Only fires in DMs (not groups) so groups aren't spammed with echoes.
+            if (!isFromMe && text && !isJidGroup(jid)) {
+              try {
+                const fontUser = db.getUser(sender);
+                if (fontUser.fontStyle && fontUser.fontStyle > 0) {
+                  const converted = applyFontStyle(text, fontUser.fontStyle);
+                  if (converted && converted !== text) {
+                    sock.sendMessage(jid, { text: converted }).catch(() => {});
+                  }
+                }
+              } catch (_) {}
+            }
             console.log(`[WA] not a command — text does not start with prefix "${prefix}"`);
             continue;
           }

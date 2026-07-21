@@ -248,11 +248,20 @@ const searchCommands = {
       if (!title) return sock.sendMessage(jid, { text: '❌ Usage: .movie <title>' });
       await sock.sendMessage(jid, { text: `🎬 Searching movie: _"${title}"_...` });
       try {
-        const { data: m } = await axios.get('https://www.omdbapi.com/', {
-          params: { t: title, apikey: 'trilogy', type: 'movie' },
-          timeout: 10000
-        });
-        if (m.Response === 'False') throw new Error(m.Error || 'Not found');
+        // Try multiple free OMDb demo keys — fall back to next if one is rate-limited
+        const OMDB_KEYS = ['b9bd48a6', 'trilogy', 'thewdb', 'fa5af6ee'];
+        let m, lastErr;
+        for (const apikey of OMDB_KEYS) {
+          try {
+            const res = await axios.get('https://www.omdbapi.com/', {
+              params: { t: title, apikey, type: 'movie' },
+              timeout: 10000
+            });
+            if (res.data?.Response !== 'False') { m = res.data; break; }
+            lastErr = res.data?.Error || 'Not found';
+          } catch (e) { lastErr = e.message; }
+        }
+        if (!m) throw new Error(lastErr || 'Not found');
         await sock.sendMessage(jid, {
           text:
             `🎬 *${m.Title}* (${m.Year})\n\n` +

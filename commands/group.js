@@ -121,6 +121,25 @@ const groupCommands = {
     }
   },
 
+  tagadmin: {
+    category: 'group', desc: 'Tag (mention) all group admins only',
+    usage: '.tagadmin [message]', aliases: ['tagadmins'], permissions: 'all',
+    examples: ['.tagadmin', '.tagadmin Attention admins!'],
+    exec: async (args, sock, jid, isGroup) => {
+      if (!isGroup) return sock.sendMessage(jid, { text: '❌ This command only works in groups.' });
+      try {
+        const meta   = await sock.groupMetadata(jid);
+        const admins = meta.participants.filter(p => p.admin).map(p => p.id);
+        if (!admins.length) return sock.sendMessage(jid, { text: '❌ No admins found in this group.' });
+        const text = args.join(' ') || '👑 Attention admins!';
+        const tags = admins.map(m => `@${m.split('@')[0]}`).join(' ');
+        await sock.sendMessage(jid, { text: `${text}\n\n${tags}`, mentions: admins });
+      } catch (err) {
+        await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
+      }
+    }
+  },
+
   tagall: {
     category: 'group', desc: 'Tag (mention) all group members',
     usage: '.tagall [message]', aliases: ['all'], permissions: 'admin',
