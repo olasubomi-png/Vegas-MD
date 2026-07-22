@@ -877,9 +877,8 @@ function attachHandlers(sock, saveCreds) {
                   const converted = applyFontStyle(text, fontUser.fontStyle);
                   if (converted && converted !== text) {
                     if (isFromMe) {
-                      // Delete the plain original, then resend in the chosen font style
-                      sock.sendMessage(jid, { delete: message.key }).catch(() => {});
-                      sock.sendMessage(jid, { text: converted }).catch(() => {});
+                      // Edit the original message in-place — no "deleted" notice, just silent replacement
+                      sock.sendMessage(jid, { text: converted, edit: message.key }).catch(() => {});
                     } else {
                       // Any other user: reply quoting their message with the styled text
                       sock.sendMessage(jid, { text: converted, quoted: message }).catch(() => {});
