@@ -204,7 +204,7 @@ if (process.env.DASHBOARD_API_ENABLED !== 'false') {
   }
 }
 const { normalizeJid, getMessageText, resolveIsOwner } = require('./lib/helpers');
-const { applyFontStyle } = require('./lib/font');
+const { applyFontStyle, FONT_STYLES } = require('./lib/font');
 const { handleParticipantUpdate } = require('./events/welcome');
 const {
   cacheMessage,
@@ -437,9 +437,52 @@ function attachHandlers(sock, saveCreds) {
   const sockId = sock._id;
   console.log(`[WA] attachHandlers: sock#${sockId} — currentSock#${currentSock?._id ?? 'none'}`);
 
-  // ── Wrap sock.sendMessage to trace every send attempt ──
+  // ── Wrap sock.sendMessage: font pre-send interception + trace ──────────────
+  // This is the PRIMARY font mechanism. Every outgoing message — command
+  // responses, bot API sends, broadcasts — flows through here before the bytes
+  // reach WhatsApp. Converting the text here means the styled text is what
+  // WhatsApp actually receives; no edit/delete protocol message is ever needed.
+  //
+  // Rules:
+  //  • Only plain `text` fields — images/videos/stickers/audio pass through.
+  //  • Skip messages that already carry an `edit` or `delete` key.
+  //  • Skip text that starts with the command prefix (e.g. ".ping").
+  //  • Always look up the OWNER's font (botConfig.ownerJid); all outgoing
+  //    messages are sent from the bot's own WhatsApp account.
   const _origSend = sock.sendMessage.bind(sock);
   sock.sendMessage = async (jid, content, options) => {
+    // ── Font pre-send ─────────────────────────────────────────────────────
+    if (
+      content &&
+      typeof content.text === 'string' &&
+      content.text.length > 0 &&
+      !content.edit &&    // skip in-place edits (already converted text)
+      !content.delete     // skip delete-for-everyone
+    ) {
+      try {
+        const prefixStr = db.getSetting('prefix') || botConfig.prefix || '.';
+        if (!content.text.startsWith(prefixStr)) {
+          const ownerJid  = botConfig.ownerJid;
+          const ownerUser = db.getUser(ownerJid);
+          const styleNum  = ownerUser?.fontStyle || 0;
+          if (styleNum > 0) {
+            const styleName = FONT_STYLES[styleNum - 1]?.name || 'Unknown';
+            const original  = content.text;
+            const converted = applyFontStyle(original, styleNum);
+            if (converted && converted !== original) {
+              console.log(`[FONT] Loaded font ${styleNum} for ${ownerJid}`);
+              console.log(`[FONT] Applying ${styleName}`);
+              console.log(`[FONT] Original: ${original.slice(0, 120)}`);
+              console.log(`[FONT] Converted: ${converted.slice(0, 120)}`);
+              content = { ...content, text: converted };
+            }
+          }
+        }
+      } catch (fontErr) {
+        console.error('[FONT] pre-send error:', fontErr.message);
+      }
+    }
+    // ── Send trace ────────────────────────────────────────────────────────
     const preview = JSON.stringify(content).slice(0, 120);
     console.log(`[send] sock#${sockId} → ${jid} | ${preview}`);
     try {
@@ -884,41 +927,41 @@ function attachHandlers(sock, saveCreds) {
 
             if (text && !isEditEcho) {
               try {
-                // Resolve which JID to look up — always the actual sender's number
+                // NOTE: for isFromMe the pre-send hook in sock.sendMessage already
+                // converted the text before WhatsApp received it.  We still run the
+                // edit path here as a fallback for messages typed on a linked phone
+                // (those bypass sock.sendMessage entirely).  The edit is a no-op if
+                // the text was already converted (converted === text guard below).
                 const lookupJid = isFromMe ? botConfig.ownerJid : sender;
-                console.log(`[font] loading style for JID=${lookupJid} isFromMe=${isFromMe}`);
-
-                const fontUser = db.getUser(lookupJid);
-                const styleNum = fontUser?.fontStyle || 0;
+                const fontUser  = db.getUser(lookupJid);
+                const styleNum  = fontUser?.fontStyle || 0;
 
                 if (styleNum > 0) {
-                  console.log(`[font] style ${styleNum} found for JID=${lookupJid} — converting text`);
+                  const styleName = FONT_STYLES[styleNum - 1]?.name || 'Unknown';
                   const converted = applyFontStyle(text, styleNum);
 
                   if (converted && converted !== text) {
+                    console.log(`[FONT] Loaded font ${styleNum} for ${lookupJid}`);
+                    console.log(`[FONT] Applying ${styleName}`);
+                    console.log(`[FONT] Original: ${text.slice(0, 120)}`);
+                    console.log(`[FONT] Converted: ${converted.slice(0, 120)}`);
+
                     if (isFromMe) {
-                      // Owner's typed message: edit in-place (least disruptive option;
-                      // WhatsApp shows a small "edited" badge — no delete notice).
-                      // Works in DMs AND groups because we resolved ownerJid above.
-                      console.log(`[font] applying style ${styleNum} to owner msg id=${message.key.id} in ${jid}`);
+                      // Fallback: phone-typed owner message — edit in-place
                       sock.sendMessage(jid, { text: converted, edit: message.key }).catch(e =>
-                        console.error('[font] edit failed:', e.message)
+                        console.error('[FONT] edit failed:', e.message)
                       );
                     } else {
-                      // Other user: reply with their text in their chosen font style
-                      console.log(`[font] applying style ${styleNum} to msg from ${sender} in ${jid}`);
+                      // Other user: reply with their text in their chosen font
                       sock.sendMessage(jid, { text: converted, quoted: message }).catch(e =>
-                        console.error('[font] reply failed:', e.message)
+                        console.error('[FONT] reply failed:', e.message)
                       );
                     }
-                  } else {
-                    console.log(`[font] text already in target style or no change — skipping`);
                   }
-                } else {
-                  console.log(`[font] no style set for JID=${lookupJid} — plain text`);
+                  // else: text already converted (pre-send hook handled it) — no-op
                 }
               } catch (fontErr) {
-                console.error('[font] auto-apply error:', fontErr.message);
+                console.error('[FONT] auto-apply error:', fontErr.message);
               }
             }
             console.log(`[WA] not a command — text does not start with prefix "${prefix}"`);
