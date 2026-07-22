@@ -87,8 +87,11 @@ const moderationCommands = {
       if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
       const msg = args.join(' ').trim();
       if (!msg) return sock.sendMessage(jid, { text: '❌ Usage: .setwelcome <message>\nVariables: @user @group @count' });
-      db.updateGroup(jid, { welcomeMsg: msg });
-      await sock.sendMessage(jid, { text: `✅ Welcome message updated:\n\n_${msg}_` });
+      // Save the message AND ensure the welcome toggle is on so the join
+      // handler actually fires (settings.welcome defaults to false).
+      db.updateGroup(jid, { welcomeMsg: msg, welcome: true });
+      console.log(`[welcome] template saved for ${jid}: "${msg}"`);
+      await sock.sendMessage(jid, { text: `✅ Welcome message set & enabled:\n\n_${msg}_\n\n_Variables: @user, @group, @count_` });
     }
   },
 

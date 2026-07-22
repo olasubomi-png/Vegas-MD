@@ -909,60 +909,57 @@ function attachHandlers(sock, saveCreds) {
           }
 
           if (!text.startsWith(prefix)) {
-            // ── Permanent font: auto-apply each user's saved font ────────────────────
+            // ── Permanent font: fallback for phone-typed owner messages ──────────────
             //
-            // Architecture notes:
-            // • isFromMe = owner typed on their phone.  In a DM, sender = contact's JID
-            //   (not the owner's), so we MUST use botConfig.ownerJid for the DB lookup.
-            //   In a group, sender = owner's JID — ownerJid works for both cases.
-            // • Non-owner users: reply to their message with the styled text so they
-            //   (and the group) see their font style applied.
-            // • Skip editedMessage / FutureProofMessage echos (the Baileys reflection of
-            //   our own edit) to prevent infinite re-edit loops.
-            // • Skip empty text to avoid no-op edits.
+            // The PRIMARY font path is the sock.sendMessage monkey-patch (above): every
+            // message the bot sends via code is converted before WhatsApp receives it —
+            // silent, no edit badge, works for all chats.
+            //
+            // This block is a FALLBACK ONLY for messages the owner types on their linked
+            // phone; those bypass sock.sendMessage entirely and arrive here as
+            // isFromMe=true via the Baileys messages.upsert event.  We edit them
+            // in-place (shows a small "edited" badge — unavoidable with the WhatsApp
+            // protocol for phone-typed messages).
+            //
+            // We do NOT touch messages from other users here.  Other users' font
+            // preferences only affect the bot's own replies to them (handled per-command
+            // or via the pre-send hook), not an unsolicited echo of their words.
             //
             const isEditEcho =
               !!message.message?.editedMessage ||
               !!message.message?.futureProofMessage?.message?.editedMessage;
 
-            if (text && !isEditEcho) {
+            if (isFromMe && text && !isEditEcho) {
               try {
-                // NOTE: for isFromMe the pre-send hook in sock.sendMessage already
-                // converted the text before WhatsApp received it.  We still run the
-                // edit path here as a fallback for messages typed on a linked phone
-                // (those bypass sock.sendMessage entirely).  The edit is a no-op if
-                // the text was already converted (converted === text guard below).
-                const lookupJid = isFromMe ? botConfig.ownerJid : sender;
-                const fontUser  = db.getUser(lookupJid);
-                const styleNum  = fontUser?.fontStyle || 0;
+                // Always use ownerJid: in a DM, sender = the contact's JID, not ours.
+                const ownerJid = botConfig.ownerJid;
+                const fontUser = db.getUser(ownerJid);
+                const styleNum = fontUser?.fontStyle || 0;
 
                 if (styleNum > 0) {
                   const styleName = FONT_STYLES[styleNum - 1]?.name || 'Unknown';
                   const converted = applyFontStyle(text, styleNum);
 
                   if (converted && converted !== text) {
-                    console.log(`[FONT] Loaded font ${styleNum} for ${lookupJid}`);
-                    console.log(`[FONT] Applying ${styleName}`);
+                    // text !== converted means the pre-send hook did NOT run (phone-typed)
+                    console.log(`[FONT] sender matched — isFromMe owner message`);
+                    console.log(`[FONT] loaded style ${styleNum} for ${ownerJid}`);
+                    console.log(`[FONT] applying ${styleName}`);
                     console.log(`[FONT] Original: ${text.slice(0, 120)}`);
                     console.log(`[FONT] Converted: ${converted.slice(0, 120)}`);
-
-                    if (isFromMe) {
-                      // Fallback: phone-typed owner message — edit in-place
-                      sock.sendMessage(jid, { text: converted, edit: message.key }).catch(e =>
-                        console.error('[FONT] edit failed:', e.message)
-                      );
-                    } else {
-                      // Other user: reply with their text in their chosen font
-                      sock.sendMessage(jid, { text: converted, quoted: message }).catch(e =>
-                        console.error('[FONT] reply failed:', e.message)
-                      );
-                    }
+                    sock.sendMessage(jid, { text: converted, edit: message.key }).catch(e =>
+                      console.error('[FONT] edit failed:', e.message)
+                    );
                   }
-                  // else: text already converted (pre-send hook handled it) — no-op
+                  // else: pre-send hook already converted — no-op
+                } else {
+                  console.log(`[FONT] skipped — owner has no font set (style=0)`);
                 }
               } catch (fontErr) {
                 console.error('[FONT] auto-apply error:', fontErr.message);
               }
+            } else if (!isFromMe) {
+              console.log(`[FONT] ignored incoming message from other user ${sender}`);
             }
             console.log(`[WA] not a command — text does not start with prefix "${prefix}"`);
             continue;
@@ -1010,10 +1007,20 @@ function attachHandlers(sock, saveCreds) {
     }
 
     // ── Group participant changes ─────────────────────────
+    // Baileys v7 fires this as an array of update objects; older builds
+    // sometimes pass a single object.  Normalise to an array so every
+    // join/leave event is processed even when multiple participants change
+    // at once (e.g. an admin adds several people in one tap).
     if (events['group-participants.update']) {
-      await handleParticipantUpdate(sock, events['group-participants.update']).catch(e =>
-        console.error('[handler] participantUpdate:', e.message)
-      );
+      const updates = Array.isArray(events['group-participants.update'])
+        ? events['group-participants.update']
+        : [events['group-participants.update']];
+      console.log(`[welcome] received ${updates.length} participant-update event(s)`);
+      for (const upd of updates) {
+        await handleParticipantUpdate(sock, upd).catch(e =>
+          console.error('[handler] participantUpdate:', e.message)
+        );
+      }
     }
   });
 }
