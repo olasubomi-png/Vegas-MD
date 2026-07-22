@@ -3,8 +3,11 @@
 const fs   = require('fs');
 const path = require('path');
 
-// Path to menu banner image (the purple Goku/OLASUBOMI-MD picture)
-const MENU_IMAGE_PATH = path.join(__dirname, '..', 'assets', 'menu.jpg');
+// Path to menu banner image
+// Prefer menu.png (Vegas-MD branded image); fall back to menu.jpg if absent
+const MENU_IMAGE_PNG  = path.join(__dirname, '..', 'assets', 'menu.png');
+const MENU_IMAGE_JPG  = path.join(__dirname, '..', 'assets', 'menu.jpg');
+const MENU_IMAGE_PATH = fs.existsSync(MENU_IMAGE_PNG) ? MENU_IMAGE_PNG : MENU_IMAGE_JPG;
 const db   = require('../lib/database');
 
 // ── Version from package.json ─────────────────────────────
@@ -227,10 +230,11 @@ const mainCommands = {
 
       // Send menu with the banner image if it exists, otherwise text-only
       if (fs.existsSync(MENU_IMAGE_PATH)) {
+        const menuMime = MENU_IMAGE_PATH.endsWith('.png') ? 'image/png' : 'image/jpeg';
         await sock.sendMessage(jid, {
-          image:   fs.readFileSync(MENU_IMAGE_PATH),
-          caption: text,
-          mimetype: 'image/jpeg'
+          image:    fs.readFileSync(MENU_IMAGE_PATH),
+          caption:  text,
+          mimetype: menuMime
         });
       } else {
         await sock.sendMessage(jid, { text });

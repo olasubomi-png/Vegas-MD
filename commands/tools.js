@@ -597,6 +597,7 @@ const toolsCommands = {
       if (!args.length) {
         const user = db.getUser(userJid);
         const current = user.fontStyle || 0;
+        console.log(`[font] menu shown for userJid=${userJid} currentStyle=${current}`);
         const currentLabel = current === 0
           ? 'Plain (default)'
           : `Font ${current} — ${styles[current - 1].name}`;
@@ -617,6 +618,7 @@ const toolsCommands = {
       // ── .font default — reset ─────────────────────────────────────
       if (first === 'default' || first === '0') {
         db.updateUser(userJid, { fontStyle: 0 });
+        console.log(`[font] reset to plain for userJid=${userJid}`);
         return sock.sendMessage(jid, { text: `🔤 Your font has been reset to *plain* (default).` });
       }
 
@@ -629,13 +631,14 @@ const toolsCommands = {
           });
         }
         db.updateUser(userJid, { fontStyle: num });
+        console.log(`[font] saved style ${num} (${styles[num - 1].name}) for userJid=${userJid}`);
         const s = styles[num - 1];
         return sock.sendMessage(jid, {
           text:
             `✅ *Font ${num} set permanently!*\n\n` +
             `Style   : ${s.name}\n` +
             `Preview : ${s.fn('Hello World')}\n\n` +
-            `_Your font stays active until you change it or type .font default_`
+            `_Your font stays active in all chats until you type .font default_`
         });
       }
 

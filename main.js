@@ -866,31 +866,60 @@ function attachHandlers(sock, saveCreds) {
           }
 
           if (!text.startsWith(prefix)) {
-            // ── Permanent font: auto-apply each user's saved font to non-command text ──
-            // • isFromMe (owner's outgoing message, any chat): edit original in-place
-            //   using the OWNER's saved font — works in DMs and groups.
-            //   NOTE: when isFromMe in a DM, sender = contact's JID (not owner's),
-            //   so we MUST look up botConfig.ownerJid, not sender.
-            // • Any other user: reply quoting their message with the styled text.
-            // • Skip editedMessage echos (bot's own edit reflected back) to prevent
-            //   infinite re-edit loops.
-            if (text && !message.message?.editedMessage) {
+            // ── Permanent font: auto-apply each user's saved font ────────────────────
+            //
+            // Architecture notes:
+            // • isFromMe = owner typed on their phone.  In a DM, sender = contact's JID
+            //   (not the owner's), so we MUST use botConfig.ownerJid for the DB lookup.
+            //   In a group, sender = owner's JID — ownerJid works for both cases.
+            // • Non-owner users: reply to their message with the styled text so they
+            //   (and the group) see their font style applied.
+            // • Skip editedMessage / FutureProofMessage echos (the Baileys reflection of
+            //   our own edit) to prevent infinite re-edit loops.
+            // • Skip empty text to avoid no-op edits.
+            //
+            const isEditEcho =
+              !!message.message?.editedMessage ||
+              !!message.message?.futureProofMessage?.message?.editedMessage;
+
+            if (text && !isEditEcho) {
               try {
+                // Resolve which JID to look up — always the actual sender's number
                 const lookupJid = isFromMe ? botConfig.ownerJid : sender;
+                console.log(`[font] loading style for JID=${lookupJid} isFromMe=${isFromMe}`);
+
                 const fontUser = db.getUser(lookupJid);
-                if (fontUser.fontStyle && fontUser.fontStyle > 0) {
-                  const converted = applyFontStyle(text, fontUser.fontStyle);
+                const styleNum = fontUser?.fontStyle || 0;
+
+                if (styleNum > 0) {
+                  console.log(`[font] style ${styleNum} found for JID=${lookupJid} — converting text`);
+                  const converted = applyFontStyle(text, styleNum);
+
                   if (converted && converted !== text) {
                     if (isFromMe) {
-                      // Edit the original message in-place — works silently in both DMs and groups
-                      sock.sendMessage(jid, { text: converted, edit: message.key }).catch(() => {});
+                      // Owner's typed message: edit in-place (least disruptive option;
+                      // WhatsApp shows a small "edited" badge — no delete notice).
+                      // Works in DMs AND groups because we resolved ownerJid above.
+                      console.log(`[font] applying style ${styleNum} to owner msg id=${message.key.id} in ${jid}`);
+                      sock.sendMessage(jid, { text: converted, edit: message.key }).catch(e =>
+                        console.error('[font] edit failed:', e.message)
+                      );
                     } else {
-                      // Any other user: reply quoting their message with the styled text
-                      sock.sendMessage(jid, { text: converted, quoted: message }).catch(() => {});
+                      // Other user: reply with their text in their chosen font style
+                      console.log(`[font] applying style ${styleNum} to msg from ${sender} in ${jid}`);
+                      sock.sendMessage(jid, { text: converted, quoted: message }).catch(e =>
+                        console.error('[font] reply failed:', e.message)
+                      );
                     }
+                  } else {
+                    console.log(`[font] text already in target style or no change — skipping`);
                   }
+                } else {
+                  console.log(`[font] no style set for JID=${lookupJid} — plain text`);
                 }
-              } catch (_) {}
+              } catch (fontErr) {
+                console.error('[font] auto-apply error:', fontErr.message);
+              }
             }
             console.log(`[WA] not a command — text does not start with prefix "${prefix}"`);
             continue;
