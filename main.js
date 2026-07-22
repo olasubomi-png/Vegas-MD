@@ -466,14 +466,9 @@ function attachHandlers(sock, saveCreds) {
           const ownerUser = db.getUser(ownerJid);
           const styleNum  = ownerUser?.fontStyle || 0;
           if (styleNum > 0) {
-            const styleName = FONT_STYLES[styleNum - 1]?.name || 'Unknown';
             const original  = content.text;
             const converted = applyFontStyle(original, styleNum);
             if (converted && converted !== original) {
-              console.log(`[FONT] Loaded font ${styleNum} for ${ownerJid}`);
-              console.log(`[FONT] Applying ${styleName}`);
-              console.log(`[FONT] Original: ${original.slice(0, 120)}`);
-              console.log(`[FONT] Converted: ${converted.slice(0, 120)}`);
               content = { ...content, text: converted };
             }
           }
@@ -937,29 +932,19 @@ function attachHandlers(sock, saveCreds) {
                 const styleNum = fontUser?.fontStyle || 0;
 
                 if (styleNum > 0) {
-                  const styleName = FONT_STYLES[styleNum - 1]?.name || 'Unknown';
                   const converted = applyFontStyle(text, styleNum);
-
                   if (converted && converted !== text) {
-                    // text !== converted means the pre-send hook did NOT run (phone-typed)
-                    console.log(`[FONT] sender matched — isFromMe owner message`);
-                    console.log(`[FONT] loaded style ${styleNum} for ${ownerJid}`);
-                    console.log(`[FONT] applying ${styleName}`);
-                    console.log(`[FONT] Original: ${text.slice(0, 120)}`);
-                    console.log(`[FONT] Converted: ${converted.slice(0, 120)}`);
+                    // converted !== text means this is a phone-typed message that the
+                    // pre-send hook never saw (phone-typed messages bypass sock.sendMessage).
                     sock.sendMessage(jid, { text: converted, edit: message.key }).catch(e =>
                       console.error('[FONT] edit failed:', e.message)
                     );
                   }
                   // else: pre-send hook already converted — no-op
-                } else {
-                  console.log(`[FONT] skipped — owner has no font set (style=0)`);
                 }
               } catch (fontErr) {
                 console.error('[FONT] auto-apply error:', fontErr.message);
               }
-            } else if (!isFromMe) {
-              console.log(`[FONT] ignored incoming message from other user ${sender}`);
             }
             console.log(`[WA] not a command — text does not start with prefix "${prefix}"`);
             continue;

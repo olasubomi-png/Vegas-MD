@@ -1,8 +1,55 @@
 'use strict';
 // commands/moderation.js — Warn, ban, welcome/goodbye configuration
-const db = require('../lib/database');
+const fs   = require('fs');
+const path = require('path');
+const db   = require('../lib/database');
 const { getMentionedJid, isGroupAdmin, resolveIsOwner } = require('../lib/helpers');
 // resolveIsOwner is used in both requireAdmin (via botConfig) and the del command
+
+const IMAGES_DIR = path.join(__dirname, '../data/group_images');
+fs.mkdirSync(IMAGES_DIR, { recursive: true });
+
+// ── Save a quoted (or direct) image to the group_images folder ─────────────
+async function saveGroupImage(sock, jid, message, type) {
+  // Support both: (a) reply to an image, (b) direct image message with caption
+  const msg = message.message;
+  const quotedMsg = msg?.extendedTextMessage?.contextInfo?.quotedMessage;
+  const imgMsg = quotedMsg?.imageMessage || msg?.imageMessage;
+
+  if (!imgMsg) {
+    return sock.sendMessage(jid, {
+      text: `❌ Reply to an image with .set${type}image to set a custom ${type} image.`
+    });
+  }
+
+  try {
+    const { downloadContentFromMessage } = require('baileys');
+    const stream = await downloadContentFromMessage(imgMsg, 'image');
+    const chunks = [];
+    for await (const chunk of stream) chunks.push(chunk);
+    const buffer = Buffer.concat(chunks);
+
+    const groupId = jid.replace(/@.*/g, '');
+    const imgPath = path.join(IMAGES_DIR, `${type}_${groupId}.jpg`);
+    fs.writeFileSync(imgPath, buffer);
+
+    await sock.sendMessage(jid, {
+      text: `✅ Custom ${type} image saved! It will be used for all ${type} messages in this group.`
+    });
+  } catch (err) {
+    console.error(`[set${type}image] download error:`, err.message);
+    await sock.sendMessage(jid, {
+      text: `❌ Failed to save image: ${err.message}\n\nMake sure you are replying to a valid image.`
+    });
+  }
+}
+
+// ── Remove a saved group image ──────────────────────────────────────────────
+function deleteGroupImage(jid, type) {
+  const groupId = jid.replace(/@.*/g, '');
+  const imgPath = path.join(IMAGES_DIR, `${type}_${groupId}.jpg`);
+  try { if (fs.existsSync(imgPath)) fs.unlinkSync(imgPath); } catch {}
+}
 
 async function requireAdmin(sock, jid, isGroup, sender, message, botConfig) {
   if (!isGroup) { await sock.sendMessage(jid, { text: '❌ This command only works in groups.' }); return false; }
@@ -96,15 +143,103 @@ const moderationCommands = {
   },
 
   setgoodbye: {
-    category: 'moderation', desc: 'Set a custom goodbye message (@user)',
+    category: 'moderation', desc: 'Set a custom goodbye message (@user, @group, @count)',
     usage: '.setgoodbye <message>', aliases: [], permissions: 'admin',
     examples: ['.setgoodbye Goodbye @user, we\'ll miss you!'],
     exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
       if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
       const msg = args.join(' ').trim();
-      if (!msg) return sock.sendMessage(jid, { text: '❌ Usage: .setgoodbye <message>\nVariables: @user' });
-      db.updateGroup(jid, { goodbyeMsg: msg });
-      await sock.sendMessage(jid, { text: `✅ Goodbye message updated:\n\n_${msg}_` });
+      if (!msg) return sock.sendMessage(jid, { text: '❌ Usage: .setgoodbye <message>\nVariables: @user @group @count' });
+      // Save the message AND ensure the goodbye toggle is on.
+      db.updateGroup(jid, { goodbyeMsg: msg, goodbye: true });
+      await sock.sendMessage(jid, { text: `✅ Goodbye message set & enabled:\n\n_${msg}_\n\n_Variables: @user, @group, @count_` });
+    }
+  },
+
+  // ── Welcome/goodbye image management ──────────────────
+  setwelcomeimage: {
+    category: 'moderation',
+    desc: 'Set a custom welcome image for this group (reply to an image)',
+    usage: '.setwelcomeimage', aliases: [], permissions: 'admin',
+    examples: ['.setwelcomeimage  ← reply to an image'],
+    exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
+      if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
+      await saveGroupImage(sock, jid, message, 'welcome');
+    }
+  },
+
+  setgoodbyeimage: {
+    category: 'moderation',
+    desc: 'Set a custom goodbye image for this group (reply to an image)',
+    usage: '.setgoodbyeimage', aliases: [], permissions: 'admin',
+    examples: ['.setgoodbyeimage  ← reply to an image'],
+    exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
+      if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
+      await saveGroupImage(sock, jid, message, 'goodbye');
+    }
+  },
+
+  delwelcomeimage: {
+    category: 'moderation',
+    desc: 'Remove the custom welcome image for this group',
+    usage: '.delwelcomeimage', aliases: [], permissions: 'admin',
+    examples: ['.delwelcomeimage'],
+    exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
+      if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
+      deleteGroupImage(jid, 'welcome');
+      await sock.sendMessage(jid, { text: '✅ Custom welcome image removed. Welcome messages will use the member\'s profile picture instead.' });
+    }
+  },
+
+  delgoodbyeimage: {
+    category: 'moderation',
+    desc: 'Remove the custom goodbye image for this group',
+    usage: '.delgoodbyeimage', aliases: [], permissions: 'admin',
+    examples: ['.delgoodbyeimage'],
+    exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
+      if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
+      deleteGroupImage(jid, 'goodbye');
+      await sock.sendMessage(jid, { text: '✅ Custom goodbye image removed. Goodbye messages will use the member\'s profile picture instead.' });
+    }
+  },
+
+  // ── Preview commands ───────────────────────────────────
+  previewwelcome: {
+    category: 'moderation',
+    desc: 'Preview the welcome message as it will appear when a member joins',
+    usage: '.previewwelcome', aliases: [], permissions: 'admin',
+    examples: ['.previewwelcome'],
+    exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
+      if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
+      const settings = db.getGroup(jid);
+      // Temporarily enable welcome for the preview call, restore after
+      const wasEnabled = settings.welcome;
+      db.updateGroup(jid, { welcome: true });
+      try {
+        const { handleParticipantUpdate } = require('../events/welcome');
+        await handleParticipantUpdate(sock, { id: jid, participants: [sender], action: 'add' });
+      } finally {
+        if (!wasEnabled) db.updateGroup(jid, { welcome: false });
+      }
+    }
+  },
+
+  previewgoodbye: {
+    category: 'moderation',
+    desc: 'Preview the goodbye message as it will appear when a member leaves',
+    usage: '.previewgoodbye', aliases: [], permissions: 'admin',
+    examples: ['.previewgoodbye'],
+    exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
+      if (!await requireAdmin(sock, jid, isGroup, sender, message, botConfig)) return;
+      const settings = db.getGroup(jid);
+      const wasEnabled = settings.goodbye;
+      db.updateGroup(jid, { goodbye: true });
+      try {
+        const { handleParticipantUpdate } = require('../events/welcome');
+        await handleParticipantUpdate(sock, { id: jid, participants: [sender], action: 'remove' });
+      } finally {
+        if (!wasEnabled) db.updateGroup(jid, { goodbye: false });
+      }
     }
   },
 

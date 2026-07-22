@@ -585,13 +585,25 @@ const toolsCommands = {
     aliases: ['fancy'],
     permissions: 'all',
     examples: ['.font', '.font 3', '.font default'],
-    exec: async (args, sock, jid, isGroup, sender) => {
+    exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
       const db = require('../lib/database');
       const { FONT_STYLES, applyFontStyle } = require('../lib/font');
       const styles = FONT_STYLES;
 
-      const SAMPLE = 'Hello';
-      const userJid = sender || jid;
+      const SAMPLE  = 'Hello';
+      const ownerJid = botConfig?.ownerJid || global.botConfig?.ownerJid;
+
+      // When saving the PERMANENT font (which the pre-send hook reads from ownerJid),
+      // we must write to ownerJid — not sender — so the lookup key always matches.
+      // In DM context sender resolves to the remote JID, not the owner's own JID.
+      //
+      // Security: only map to ownerJid when the caller is actually the owner.
+      //   • message.key.fromMe === true  → owner typed this from their phone (any chat)
+      //   • sender === ownerJid          → owner's number matches in group context
+      // For all other callers the save goes to their own sender JID, which the
+      // pre-send hook never reads, so they cannot affect global outgoing formatting.
+      const isOwner  = message?.key?.fromMe === true || sender === ownerJid;
+      const userJid  = isOwner && ownerJid ? ownerJid : (sender || jid);
 
       // ── No args: show the full menu ───────────────────────────────
       if (!args.length) {
