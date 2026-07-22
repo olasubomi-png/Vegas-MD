@@ -79,7 +79,7 @@ function cacheMessage(message) {
 //   (b) a REVOKE protocolMessage arrives in messages.upsert
 //       (the normal "delete for everyone" path)
 // ─────────────────────────────────────────────────────────
-async function handleAntiDelete(sock, deletedKeys) {
+async function handleAntiDelete(sock, deletedKeys, botConfig) {
   for (const key of deletedKeys) {
     const msgId = typeof key === 'string' ? key : key.id;
     if (!msgId) continue;
@@ -97,16 +97,17 @@ async function handleAntiDelete(sock, deletedKeys) {
       const settings = db.getGroup(chatJid);
       if (!settings.antiDelete) continue;
     } else {
-      // DMs: respect the per-user antiDelete setting of the person we're chatting with.
-      // chatJid is the other person's JID — check if THEY have antiDelete enabled.
-      const dmUser = db.getUser(chatJid);
-      if (!dmUser.antiDelete) continue;
+      // DMs: check the session owner's own antiDelete setting (did THEY enable it for their session?)
+      const ownerJidCheck = botConfig?.ownerJid || null;
+      const ownerEnabled  = ownerJidCheck ? db.getOwnerSetting(ownerJidCheck, 'antiDelete', false) : false;
+      if (!ownerEnabled) continue;
     }
 
     const senderNum = cached.sender.split('@')[0];
 
-    // Owner JID for DM notification
-    const ownerNum = (process.env.OWNER_NUMBER || '').replace(/\D/g, '');
+    // Owner JID for DM notification — prefer the per-session ownerJid from botConfig
+    const ownerNum = (botConfig?.ownerJid || '').replace(/[@:].*/g, '') ||
+                     (process.env.OWNER_NUMBER || '').replace(/\D/g, '');
     const ownerJid = ownerNum ? `${ownerNum}@s.whatsapp.net` : null;
 
     try {
@@ -199,7 +200,7 @@ async function handleAntiDelete(sock, deletedKeys) {
 // when a protocolMessage with type REVOKE (0) arrives.
 // This is the standard "delete for everyone" path.
 // ─────────────────────────────────────────────────────────
-async function handleAntiDeleteRevocation(sock, message) {
+async function handleAntiDeleteRevocation(sock, message, botConfig) {
   const proto = message.message?.protocolMessage;
   if (!proto || proto.type !== 0) return; // 0 = REVOKE
 
@@ -209,7 +210,7 @@ async function handleAntiDeleteRevocation(sock, message) {
   const revokedKey = proto.key;
   if (!revokedKey?.id) return;
 
-  await handleAntiDelete(sock, [{ id: revokedKey.id, remoteJid: message.key?.remoteJid }]);
+  await handleAntiDelete(sock, [{ id: revokedKey.id, remoteJid: message.key?.remoteJid }], botConfig);
 }
 
 // ─────────────────────────────────────────────────────────
@@ -407,10 +408,11 @@ async function handleAutoReact(sock, message) {
 //   antiVideoCall : boolean
 //   antiCallMode  : 'cut' | 'block'
 // ─────────────────────────────────────────────────────────
-async function handleAntiCall(sock, calls) {
-  const antiVoice  = db.getSetting('antiCall',      false);
-  const antiVideo  = db.getSetting('antiVideoCall',  false);
-  const callMode   = db.getSetting('antiCallMode',  'cut');
+async function handleAntiCall(sock, calls, botConfig) {
+  const ownerJid  = botConfig?.ownerJid || null;
+  const antiVoice = db.getOwnerSetting(ownerJid, 'antiCall',      false);
+  const antiVideo = db.getOwnerSetting(ownerJid, 'antiVideoCall', false);
+  const callMode  = db.getOwnerSetting(ownerJid, 'antiCallMode',  'cut');
 
   if (!antiVoice && !antiVideo) return;
 
@@ -452,7 +454,10 @@ async function handleAntiCall(sock, calls) {
     }
 
     // ── Notify owner via DM ──────────────────────────────
-    const ownerNum = (process.env.OWNER_NUMBER || '').replace(/\D/g, '');
+    const _rawOwner = botConfig?.ownerJid
+      ? botConfig.ownerJid.replace(/[@:].*/g, '')
+      : (process.env.OWNER_NUMBER || '').replace(/\D/g, '');
+    const ownerNum = _rawOwner;
     if (ownerNum) {
       const ownerJid = `${ownerNum}@s.whatsapp.net`;
       const actionLabel = (() => {

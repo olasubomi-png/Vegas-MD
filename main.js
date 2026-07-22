@@ -223,13 +223,18 @@ const allCommands    = require('./commands/index');
 const sessionManager = require('./lib/sessionManager');
 
 // ─── Bot configuration ────────────────────────────────────
+const _primaryOwnerNum = (process.env.OWNER_NUMBER || '').replace(/\D/g, '');
+const _primaryOwnerJid = _primaryOwnerNum ? `${_primaryOwnerNum}@s.whatsapp.net` : '';
+
 const botConfig = {
   name:        process.env.BOT_NAME   || 'OLASUBOMI-MD',
   version:     '3.0.0',
   beta:        'Beta',
-  prefix:      db.getSetting('prefix', null) || process.env.BOT_PREFIX || '.',
-  mode:        db.getSetting('mode',   null) || process.env.BOT_MODE   || 'private',
+  // Load prefix/mode from per-owner settings first, fall back to global then env
+  prefix:      db.getOwnerSetting(_primaryOwnerJid, 'prefix', null) || db.getSetting('prefix', null) || process.env.BOT_PREFIX || '.',
+  mode:        db.getOwnerSetting(_primaryOwnerJid, 'mode',   null) || db.getSetting('mode',   null) || process.env.BOT_MODE   || 'private',
   ownerNumber: process.env.OWNER_NUMBER || '',
+  ownerJid:    _primaryOwnerJid,
   ownerName:   process.env.OWNER_NAME  || 'Olasubomi',
   description: 'Advanced WhatsApp Bot'
 };
@@ -772,7 +777,7 @@ function attachHandlers(sock, saveCreds) {
           // This is how WhatsApp delivers user-initiated deletions.
           // Route them to anti-delete BEFORE any other processing.
           if (message.message?.protocolMessage?.type === 0) {
-            await handleAntiDeleteRevocation(sock, message).catch(e =>
+            await handleAntiDeleteRevocation(sock, message, botConfig).catch(e =>
               console.error('[handler] antiDeleteRevocation:', e.message)
             );
             continue; // protocol messages are not commands
@@ -810,7 +815,7 @@ function attachHandlers(sock, saveCreds) {
           }
 
           // ── Auto-Read: mark incoming messages as read when enabled ──
-          if (!isFromMe && db.getSetting('autoRead', false)) {
+          if (!isFromMe && db.getOwnerSetting(botConfig.ownerJid, 'autoRead', false)) {
             sock.readMessages([message.key]).catch(e =>
               console.error('[handler] autoRead:', e.message)
             );
@@ -862,20 +867,21 @@ function attachHandlers(sock, saveCreds) {
 
           if (!text.startsWith(prefix)) {
             // ── Permanent font: auto-apply each user's saved font to non-command text ──
-            // • isFromMe in DMs  → echo converted text (appears inline in the chat)
-            // • Any other user   → reply to their message with the converted text,
-            //   works in both DMs and groups so everyone's saved font is applied.
+            // • isFromMe (owner's outgoing message, any chat): delete original plain text,
+            //   resend in their chosen font — works in DMs and groups.
+            // • Any other user: reply to their message with the font-converted text.
             if (text) {
               try {
                 const fontUser = db.getUser(sender);
                 if (fontUser.fontStyle && fontUser.fontStyle > 0) {
                   const converted = applyFontStyle(text, fontUser.fontStyle);
                   if (converted && converted !== text) {
-                    if (isFromMe && !isJidGroup(jid)) {
-                      // Owner's own DM message: echo so the styled version appears in chat
+                    if (isFromMe) {
+                      // Delete the plain original, then resend in the chosen font style
+                      sock.sendMessage(jid, { delete: message.key }).catch(() => {});
                       sock.sendMessage(jid, { text: converted }).catch(() => {});
-                    } else if (!isFromMe) {
-                      // Any user with a saved font: reply with their text in their font style
+                    } else {
+                      // Any other user: reply quoting their message with the styled text
                       sock.sendMessage(jid, { text: converted, quoted: message }).catch(() => {});
                     }
                   }
@@ -893,7 +899,7 @@ function attachHandlers(sock, saveCreds) {
           console.log(`[WA] dispatching .${command} to handleCommand (sock#${sockId})`);
 
           // ── Auto-Typing: show a typing indicator while a command runs ──
-          if (db.getSetting('autoTyping', false)) {
+          if (db.getOwnerSetting(botConfig.ownerJid, 'autoTyping', false)) {
             sock.sendPresenceUpdate('composing', jid).catch(e =>
               console.error('[handler] autoTyping:', e.message)
             );
@@ -902,7 +908,7 @@ function attachHandlers(sock, saveCreds) {
           handleCommand(command, parts, message, sock, botConfig).catch(err =>
             console.error(`[cmd] .${command} unhandled exception:\n${err.stack || err.message}`)
           ).finally(() => {
-            if (db.getSetting('autoTyping', false)) {
+            if (db.getOwnerSetting(botConfig.ownerJid, 'autoTyping', false)) {
               sock.sendPresenceUpdate('paused', jid).catch(() => {});
             }
           });
@@ -915,14 +921,14 @@ function attachHandlers(sock, saveCreds) {
       // Baileys may emit { keys: [...] } or a plain array — handle both
       const raw  = events['messages.delete'];
       const keys = Array.isArray(raw) ? raw : (raw.keys || []);
-      await handleAntiDelete(sock, keys).catch(e =>
+      await handleAntiDelete(sock, keys, botConfig).catch(e =>
         console.error('[handler] antiDelete:', e.message)
       );
     }
 
     // ── Incoming calls (anti-call / anti-video-call) ──────
     if (events['call']) {
-      await handleAntiCall(sock, events['call']).catch(e =>
+      await handleAntiCall(sock, events['call'], botConfig).catch(e =>
         console.error('[handler] antiCall:', e.message)
       );
     }

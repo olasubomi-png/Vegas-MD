@@ -32,7 +32,7 @@ outputType = "webview"
 [userenv]
 
 [userenv.shared]
-OWNER_NUMBER = "2349112097911"
+OWNER_NUMBER = "2349061198658"
 ZST_API_KEY = "zst_QFpFjVK9LlJPB8BEujrSz3TdHHld52vVam9rQWrq"
 BOT_API_URL = "http://13.60.31.145:8090"
 DASHBOARD_API_ENABLED = "true"

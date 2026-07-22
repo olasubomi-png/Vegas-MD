@@ -51,6 +51,7 @@ const ownerCommands = {
       const m      = Math.floor((s % 3600) / 60);
       const _idx   = require('./index');
       const total  = Object.keys(_idx).filter(k => typeof _idx[k]?.exec === 'function').length;
+      const ownerJid = botConfig?.ownerJid || '';
       await sock.sendMessage(jid, {
         text:
           `🛠️ *Owner Dashboard*\n\n` +
@@ -64,12 +65,12 @@ const ownerCommands = {
           `├ Users    : ${stats.users}\n` +
           `├ Groups   : ${stats.groups}\n` +
           `└ Banned   : ${stats.banned}\n\n` +
-          `*⚙️ Global Settings*\n` +
-          `├ AutoStatus  : ${db.getSetting('autoStatus', false) ? '✅' : '❌'}\n` +
-          `├ AutoReact   : ${db.getSetting('autoStatusReact', false) ? '✅' : '❌'}\n` +
-          `├ AutoRead    : ${db.getSetting('autoRead', false) ? '✅' : '❌'}\n` +
-          `├ AutoTyping  : ${db.getSetting('autoTyping', false) ? '✅' : '❌'}\n` +
-          `└ AntiCall    : ${db.getSetting('antiCall', false) ? '✅' : '❌'}`
+          `*⚙️ My Settings*\n` +
+          `├ AutoStatus  : ${db.getOwnerSetting(ownerJid, 'autoStatus', false) ? '✅' : '❌'}\n` +
+          `├ AutoReact   : ${db.getOwnerSetting(ownerJid, 'autoStatusReact', false) ? '✅' : '❌'}\n` +
+          `├ AutoRead    : ${db.getOwnerSetting(ownerJid, 'autoRead', false) ? '✅' : '❌'}\n` +
+          `├ AutoTyping  : ${db.getOwnerSetting(ownerJid, 'autoTyping', false) ? '✅' : '❌'}\n` +
+          `└ AntiCall    : ${db.getOwnerSetting(ownerJid, 'antiCall', false) ? '✅' : '❌'}`
       });
     })
   },
@@ -83,9 +84,11 @@ const ownerCommands = {
       if (!['public', 'private'].includes(m)) {
         return sock.sendMessage(jid, { text: '❌ Usage: .mode public OR .mode private' });
       }
-      if (botConfig)       botConfig.mode       = m;
-      if (global.botConfig) global.botConfig.mode = m;
-      db.setSetting('mode', m);
+      // Update in-memory config for this session
+      if (botConfig) botConfig.mode = m;
+      if (global.botConfig && botConfig === global.botConfig) global.botConfig.mode = m;
+      // Persist per-owner so each session is independent
+      db.setOwnerSetting(botConfig?.ownerJid, 'mode', m);
       await sock.sendMessage(jid, { text: `✅ Bot mode set to *${m}*` });
     })
   },
@@ -99,9 +102,9 @@ const ownerCommands = {
       if (!['public', 'private'].includes(m)) {
         return sock.sendMessage(jid, { text: '❌ Usage: .setmode public OR .setmode private' });
       }
-      if (botConfig)        botConfig.mode        = m;
-      if (global.botConfig) global.botConfig.mode = m;
-      db.setSetting('mode', m);
+      if (botConfig) botConfig.mode = m;
+      if (global.botConfig && botConfig === global.botConfig) global.botConfig.mode = m;
+      db.setOwnerSetting(botConfig?.ownerJid, 'mode', m);
       await sock.sendMessage(jid, { text: `✅ Bot mode set to *${m}*` });
     })
   },
@@ -115,9 +118,9 @@ const ownerCommands = {
       if (!prefix || prefix.length > 3) {
         return sock.sendMessage(jid, { text: '❌ Usage: .setprefix <symbol>\nExample: .setprefix !' });
       }
-      if (botConfig)        botConfig.prefix        = prefix;
-      if (global.botConfig) global.botConfig.prefix = prefix;
-      db.setSetting('prefix', prefix);
+      if (botConfig) botConfig.prefix = prefix;
+      if (global.botConfig && botConfig === global.botConfig) global.botConfig.prefix = prefix;
+      db.setOwnerSetting(botConfig?.ownerJid, 'prefix', prefix);
       await sock.sendMessage(jid, { text: `✅ Prefix changed to *${prefix}*\n\nNew command: *${prefix}menu*` });
     })
   },
@@ -182,17 +185,17 @@ const ownerCommands = {
       const isOwner = resolveIsOwner(message, sender, botConfig);
 
       if (isOwner) {
-        // ── Owner: global on/off toggle (existing behaviour) ──────
+        // ── Owner: per-session on/off toggle ──────────────────────
         const sub = (args[0] || '').toLowerCase();
         if (sub !== 'on' && sub !== 'off') {
-          const cur = db.getSetting('autoStatus', false);
+          const cur = db.getOwnerSetting(botConfig?.ownerJid, 'autoStatus', false);
           return sock.sendMessage(jid, {
-            text: `👁️ *Auto-Status (Global)*\nCurrently: *${cur ? 'ON ✅' : 'OFF ❌'}*\n\nUsage: *.autostatus on* or *.autostatus off*\n_Non-owners can also toggle their own status in a DM (no args)._`
+            text: `👁️ *Auto-Status*\nCurrently: *${cur ? 'ON ✅' : 'OFF ❌'}*\n\nUsage: *.autostatus on* or *.autostatus off*\n_Non-owners can also toggle their own status in a DM (no args)._`
           });
         }
         const v = sub === 'on';
-        db.setSetting('autoStatus', v);
-        return sock.sendMessage(jid, { text: `👁️ Auto-Status (Global): ${v ? '✅ Enabled' : '❌ Disabled'}` });
+        db.setOwnerSetting(botConfig?.ownerJid, 'autoStatus', v);
+        return sock.sendMessage(jid, { text: `👁️ Auto-Status: ${v ? '✅ Enabled' : '❌ Disabled'}` });
       }
 
       // ── Non-owner in a group ───────────────────────────────────
@@ -218,11 +221,12 @@ const ownerCommands = {
     category: 'owner', desc: 'Turn auto-reacting to status updates on/off',
     usage: '.autostatusreact <on|off>', aliases: [], permissions: 'owner',
     examples: ['.autostatusreact on', '.autostatusreact off'],
-    exec: ownerOnly(async (args, sock, jid) => {
+    exec: ownerOnly(async (args, sock, jid, isGroup, sender, message, botConfig) => {
+      const ownerJid = botConfig?.ownerJid;
       const sub = (args[0] || '').toLowerCase();
       if (sub !== 'on' && sub !== 'off') {
-        const cur      = db.getSetting('autoStatusReact', false);
-        const viewOn   = db.getSetting('autoStatus', false);
+        const cur    = db.getOwnerSetting(ownerJid, 'autoStatusReact', false);
+        const viewOn = db.getOwnerSetting(ownerJid, 'autoStatus', false);
         return sock.sendMessage(jid, {
           text:
             `❤️ *Auto-Status React: ${cur ? 'ON ✅' : 'OFF ❌'}*\n` +
@@ -232,11 +236,9 @@ const ownerCommands = {
         });
       }
       const v = sub === 'on';
-      db.setSetting('autoStatusReact', v);
-      // Reacting to a status requires the bot to view it first.
-      // Auto-enable autoStatus when turning reactions on so both work together.
-      if (v && !db.getSetting('autoStatus', false)) {
-        db.setSetting('autoStatus', true);
+      db.setOwnerSetting(ownerJid, 'autoStatusReact', v);
+      if (v && !db.getOwnerSetting(ownerJid, 'autoStatus', false)) {
+        db.setOwnerSetting(ownerJid, 'autoStatus', true);
         await sock.sendMessage(jid, {
           text:
             `❤️ Auto-Status React: ✅ Enabled\n` +
@@ -252,16 +254,17 @@ const ownerCommands = {
     category: 'owner', desc: 'Turn auto-reading (mark messages as read) on/off',
     usage: '.autoread <on|off>', aliases: [], permissions: 'owner',
     examples: ['.autoread on', '.autoread off'],
-    exec: ownerOnly(async (args, sock, jid) => {
+    exec: ownerOnly(async (args, sock, jid, isGroup, sender, message, botConfig) => {
+      const ownerJid = botConfig?.ownerJid;
       const sub = (args[0] || '').toLowerCase();
       if (sub !== 'on' && sub !== 'off') {
-        const cur = db.getSetting('autoRead', false);
+        const cur = db.getOwnerSetting(ownerJid, 'autoRead', false);
         return sock.sendMessage(jid, {
           text: `📖 Auto-Read is currently *${cur ? 'ON' : 'OFF'}*.\n\nUsage: *.autoread on* or *.autoread off*`
         });
       }
       const v = sub === 'on';
-      db.setSetting('autoRead', v);
+      db.setOwnerSetting(ownerJid, 'autoRead', v);
       await sock.sendMessage(jid, { text: `📖 Auto-Read: ${v ? '✅ Enabled' : '❌ Disabled'}` });
     })
   },
@@ -270,16 +273,17 @@ const ownerCommands = {
     category: 'owner', desc: 'Turn auto-typing indicator when processing commands on/off',
     usage: '.autotyping <on|off>', aliases: [], permissions: 'owner',
     examples: ['.autotyping on', '.autotyping off'],
-    exec: ownerOnly(async (args, sock, jid) => {
+    exec: ownerOnly(async (args, sock, jid, isGroup, sender, message, botConfig) => {
+      const ownerJid = botConfig?.ownerJid;
       const sub = (args[0] || '').toLowerCase();
       if (sub !== 'on' && sub !== 'off') {
-        const cur = db.getSetting('autoTyping', false);
+        const cur = db.getOwnerSetting(ownerJid, 'autoTyping', false);
         return sock.sendMessage(jid, {
           text: `⌨️ Auto-Typing is currently *${cur ? 'ON' : 'OFF'}*.\n\nUsage: *.autotyping on* or *.autotyping off*`
         });
       }
       const v = sub === 'on';
-      db.setSetting('autoTyping', v);
+      db.setOwnerSetting(ownerJid, 'autoTyping', v);
       await sock.sendMessage(jid, { text: `⌨️ Auto-Typing: ${v ? '✅ Enabled' : '❌ Disabled'}` });
     })
   },
@@ -291,13 +295,14 @@ const ownerCommands = {
     aliases: [],
     permissions: 'owner',
     examples: ['.anticall on', '.anticall off', '.anticall block', '.anticall cut', '.anticall status'],
-    exec: ownerOnly(async (args, sock, jid) => {
+    exec: ownerOnly(async (args, sock, jid, isGroup, sender, message, botConfig) => {
+      const ownerJid = botConfig?.ownerJid;
       const sub  = (args[0] || '').toLowerCase();
-      const mode = db.getSetting('antiCallMode',  'cut');
+      const mode = db.getOwnerSetting(ownerJid, 'antiCallMode', 'cut');
 
       if (!sub || sub === 'status') {
-        const voiceOn = db.getSetting('antiCall',     false);
-        const videoOn = db.getSetting('antiVideoCall', false);
+        const voiceOn = db.getOwnerSetting(ownerJid, 'antiCall',      false);
+        const videoOn = db.getOwnerSetting(ownerJid, 'antiVideoCall', false);
         return sock.sendMessage(jid, {
           text:
             `┏━━〔 📵 *Anti-Call Status* 〕━━┓\n` +
@@ -311,24 +316,24 @@ const ownerCommands = {
       }
 
       if (sub === 'on') {
-        db.setSetting('antiCall', true);
+        db.setOwnerSetting(ownerJid, 'antiCall', true);
         return sock.sendMessage(jid, {
           text: `📵 *Anti-Call (Voice): ✅ Enabled*\nMode: *${mode.toUpperCase()}*\n\nAll voice calls will be automatically rejected.`
         });
       }
 
       if (sub === 'off') {
-        db.setSetting('antiCall', false);
+        db.setOwnerSetting(ownerJid, 'antiCall', false);
         return sock.sendMessage(jid, { text: '📵 *Anti-Call (Voice): ❌ Disabled*' });
       }
 
       if (sub === 'cut') {
-        db.setSetting('antiCallMode', 'cut');
+        db.setOwnerSetting(ownerJid, 'antiCallMode', 'cut');
         return sock.sendMessage(jid, { text: '📵 *Anti-Call mode: CUT*\n\nCalls will be rejected only (caller not blocked).' });
       }
 
       if (sub === 'block') {
-        db.setSetting('antiCallMode', 'block');
+        db.setOwnerSetting(ownerJid, 'antiCallMode', 'block');
         return sock.sendMessage(jid, { text: '📵 *Anti-Call mode: BLOCK*\n\nCalls will be rejected and the caller will be blocked.' });
       }
 
@@ -345,12 +350,13 @@ const ownerCommands = {
     aliases: ['antivc'],
     permissions: 'owner',
     examples: ['.antivideocall on', '.antivideocall off', '.antivideocall status'],
-    exec: ownerOnly(async (args, sock, jid) => {
+    exec: ownerOnly(async (args, sock, jid, isGroup, sender, message, botConfig) => {
+      const ownerJid = botConfig?.ownerJid;
       const sub  = (args[0] || '').toLowerCase();
-      const mode = db.getSetting('antiCallMode', 'cut');
+      const mode = db.getOwnerSetting(ownerJid, 'antiCallMode', 'cut');
 
       if (!sub || sub === 'status') {
-        const videoOn = db.getSetting('antiVideoCall', false);
+        const videoOn = db.getOwnerSetting(ownerJid, 'antiVideoCall', false);
         return sock.sendMessage(jid, {
           text:
             `📹 *Anti-Video-Call: ${videoOn ? '✅ Enabled' : '❌ Disabled'}*\n` +
@@ -360,14 +366,14 @@ const ownerCommands = {
       }
 
       if (sub === 'on') {
-        db.setSetting('antiVideoCall', true);
+        db.setOwnerSetting(ownerJid, 'antiVideoCall', true);
         return sock.sendMessage(jid, {
           text: `📹 *Anti-Video-Call: ✅ Enabled*\nMode: *${mode.toUpperCase()}*\n\nAll video calls will be automatically rejected.`
         });
       }
 
       if (sub === 'off') {
-        db.setSetting('antiVideoCall', false);
+        db.setOwnerSetting(ownerJid, 'antiVideoCall', false);
         return sock.sendMessage(jid, { text: '📹 *Anti-Video-Call: ❌ Disabled*' });
       }
 
@@ -399,15 +405,15 @@ const ownerCommands = {
       }
 
       if (isOwner) {
-        // ── Owner in DM: toggle global setting ───────────────────
-        const v = !db.getSetting('antiDelete', false);
-        db.setSetting('antiDelete', v);
+        // ── Owner in DM: toggle per-session anti-delete setting ───
+        const v = !db.getOwnerSetting(botConfig?.ownerJid, 'antiDelete', false);
+        db.setOwnerSetting(botConfig?.ownerJid, 'antiDelete', v);
         return sock.sendMessage(jid, {
           text:
-            `🗑️ *Global Anti-Delete: ${v ? '✅ Enabled' : '❌ Disabled'}*\n\n` +
+            `🗑️ *Anti-Delete: ${v ? '✅ Enabled' : '❌ Disabled'}*\n\n` +
             (v
-              ? `_Monitors DMs for everyone who has also enabled it._\n_Also run .antidelete inside any group to enable it there._`
-              : `_Global anti-delete is now off._`)
+              ? `_Your bot will now re-post deleted DM messages.\n_Also run .antidelete inside any group to enable it there._`
+              : `_Anti-delete is now off for your session._`)
         });
       }
 
