@@ -867,17 +867,22 @@ function attachHandlers(sock, saveCreds) {
 
           if (!text.startsWith(prefix)) {
             // ── Permanent font: auto-apply each user's saved font to non-command text ──
-            // • isFromMe (owner's outgoing message, any chat): delete original plain text,
-            //   resend in their chosen font — works in DMs and groups.
-            // • Any other user: reply to their message with the font-converted text.
-            if (text) {
+            // • isFromMe (owner's outgoing message, any chat): edit original in-place
+            //   using the OWNER's saved font — works in DMs and groups.
+            //   NOTE: when isFromMe in a DM, sender = contact's JID (not owner's),
+            //   so we MUST look up botConfig.ownerJid, not sender.
+            // • Any other user: reply quoting their message with the styled text.
+            // • Skip editedMessage echos (bot's own edit reflected back) to prevent
+            //   infinite re-edit loops.
+            if (text && !message.message?.editedMessage) {
               try {
-                const fontUser = db.getUser(sender);
+                const lookupJid = isFromMe ? botConfig.ownerJid : sender;
+                const fontUser = db.getUser(lookupJid);
                 if (fontUser.fontStyle && fontUser.fontStyle > 0) {
                   const converted = applyFontStyle(text, fontUser.fontStyle);
                   if (converted && converted !== text) {
                     if (isFromMe) {
-                      // Edit the original message in-place — no "deleted" notice, just silent replacement
+                      // Edit the original message in-place — works silently in both DMs and groups
                       sock.sendMessage(jid, { text: converted, edit: message.key }).catch(() => {});
                     } else {
                       // Any other user: reply quoting their message with the styled text
