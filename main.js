@@ -651,11 +651,11 @@ function attachHandlers(sock, saveCreds) {
             } catch (e) {
               console.error('[WA] Could not clear auth_info_baileys/:', e.message);
             }
-            // Exponential backoff: 15s, 30s, 60s, 120s … capped at 5 min.
-            // Rapid reconnects after a 401 make WhatsApp keep rejecting at the
-            // noise-handshake level before it can emit a QR — giving it more
-            // breathing room between attempts lets the next attempt succeed.
-            const backoffMs = Math.min(15_000 * Math.pow(2, failCount - 1), 300_000);
+            // Exponential backoff: 5s, 10s, 20s … capped at 30s.
+            // Kept short so the user gets a fresh pairing code quickly after
+            // a transient 401 (e.g. post-ban account recovery, stale keys).
+            // Longer waits were confusing — the user thought the bot had frozen.
+            const backoffMs = Math.min(5_000 * Math.pow(2, failCount - 1), 30_000);
             console.log(`[WA]    Waiting ${Math.round(backoffMs / 1000)}s before next attempt (backoff #${failCount})...`);
             scheduleReconnect(backoffMs, { freshLogin: true });
             return;
