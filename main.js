@@ -277,12 +277,24 @@ let reconnectTimer       = null;
 let _sockSeq             = 0;   // monotonically increasing socket ID for identity tracing
 
 // ─── Pairing-code guard ───────────────────────────────────
-// Reset to false at the start of every connect() call so each
-// fresh socket gets exactly one pairing-code request.
-// Set to true after the first successful requestPairingCode().
-// Never reset while waiting for the user to link — doing so
-// would generate a second code and invalidate the first.
+// pairingCodeRequested tracks whether THIS socket has already called
+// requestPairingCode().  It is always reset to false at the start of
+// connect() because pairingCodeRequested belongs to a single socket's
+// lifecycle — once a socket is destroyed any code it issued is already
+// invalid on WhatsApp's servers, so a new socket always needs a new code.
 let pairingCodeRequested = false;
+
+// ─── Pairing state machine ────────────────────────────────
+// Explicit states make the connection lifecycle easy to read in logs
+// and provide a single source of truth for the current pairing phase.
+const PairingState = Object.freeze({
+  IDLE:               'idle',               // no socket yet
+  REQUESTING_PAIRING: 'requesting_pairing', // awaiting requestPairingCode()
+  WAITING_FOR_LINK:   'waiting_for_link',   // code shown, waiting for user
+  CONNECTED:          'connected',          // session open and active
+  FAILED_RESET:       'failed_reset',       // auth wiped, will retry
+});
+let pairingState = PairingState.IDLE;
 
 // ─── Post-logout wipe grace flag ──────────────────────────
 // Set to true by wipAndRepair() after a clean logout-triggered
@@ -561,21 +573,24 @@ function attachHandlers(sock, saveCreds) {
             // Set flag BEFORE the async call so a concurrent QR event
             // cannot race through the guard while we await the code.
             pairingCodeRequested = true;
+            pairingState = PairingState.REQUESTING_PAIRING;
+            console.log('[WA] Pairing started');
             console.log(`[WA] Requesting pairing code for ${phoneNumber} (one-time per socket)...`);
             try {
               const code = await sock.requestPairingCode(phoneNumber);
+              pairingState = PairingState.WAITING_FOR_LINK;
+              console.log('[WA] Pairing code generated');
               console.log(`\n📱 PAIRING CODE: ${code}`);
               botState.setConnection('pairing', { pairingCode: code });
               console.log('    WhatsApp → Settings → Linked Devices → Link a Device → Enter code above');
-              console.log('    ⏳ Waiting for you to link. Do NOT restart the bot.\n');
+              console.log('[WA] Waiting for user to link device');
+              console.log('    ⏳ You have ~60 seconds. Do NOT restart the bot.\n');
             } catch (err) {
               console.error('[WA] Pairing code request failed:', err.message);
-              // Reset only on failure so a retry fires on the next QR refresh.
-              // On success pairingCodeRequested stays true forever for this socket:
-              // a second requestPairingCode() would invalidate the code the user
-              // is actively trying to enter.
+              // Reset on failure so a retry fires on the next QR refresh.
               pairingCodeRequested = false;
-              console.log('[WA] Will retry pairing code on next QR refresh...');
+              pairingState = PairingState.IDLE;
+              console.log('[WA] Pairing failed, resetting state — will retry on next QR event...');
             }
           }
         }
@@ -644,6 +659,8 @@ function attachHandlers(sock, saveCreds) {
               return;
             }
 
+            pairingState = PairingState.FAILED_RESET;
+            console.log('[WA] Pairing failed, resetting state');
             console.log('[WA]    Wiping auth_info_baileys/ and starting a clean pairing flow...');
             try {
               fs.rmSync('auth_info_baileys', { recursive: true, force: true });
@@ -651,10 +668,11 @@ function attachHandlers(sock, saveCreds) {
             } catch (e) {
               console.error('[WA] Could not clear auth_info_baileys/:', e.message);
             }
+            // Set grace flag so that if the very next connect also gets a 401
+            // (WhatsApp server-side delay after our wipe) it does NOT burn
+            // another failure counter entry — same protection as wipAndRepair().
+            _freshWipeGrace = true;
             // Exponential backoff: 5s, 10s, 20s … capped at 30s.
-            // Kept short so the user gets a fresh pairing code quickly after
-            // a transient 401 (e.g. post-ban account recovery, stale keys).
-            // Longer waits were confusing — the user thought the bot had frozen.
             const backoffMs = Math.min(5_000 * Math.pow(2, failCount - 1), 30_000);
             console.log(`[WA]    Waiting ${Math.round(backoffMs / 1000)}s before next attempt (backoff #${failCount})...`);
             scheduleReconnect(backoffMs, { freshLogin: true });
@@ -663,19 +681,24 @@ function attachHandlers(sock, saveCreds) {
 
           // ── Any other close reason while unregistered = mid-pairing drop ──
           //
-          // WhatsApp delivers the identity keys over the active WebSocket when
-          // the user enters the code.  Without a live socket the handshake
-          // cannot complete.  Do NOT wipe auth_info_baileys/ (it holds the
-          // identity keys WA uses to recognise this bot instance) and do NOT
-          // request a new code (freshLogin=false keeps pairingCodeRequested).
+          // The connection dropped while we were waiting for the user to enter
+          // the pairing code (408 connectionLost is the most common cause).
+          //
+          // IMPORTANT: Once a socket closes, any code it issued is immediately
+          // invalidated by WhatsApp.  We must create a new socket AND request a
+          // new code.  auth_info_baileys/ is NOT wiped — the noise keys written
+          // during the handshake attempt are still valid for the new socket.
+          //
+          // We use freshLogin=true so connect() logs the intent clearly.
+          // pairingCodeRequested is now ALWAYS reset inside connect() regardless
+          // of freshLogin, so the new socket will correctly request a new code.
+          pairingState = PairingState.FAILED_RESET;
           console.log(
-            `[WA] ⚠  Connection dropped during pairing — ${reasonName}(${statusCode}).` +
-            ` | pairingCodeRequested: ${pairingCodeRequested}` +
-            ` | registered: ${registered}`
+            `[WA] Pairing interrupted — ${reasonName}(${statusCode}).` +
+            ` Previous code is now invalid. Requesting a fresh code in 5s...`
           );
-          console.log('[WA]    Reconnecting silently in 5s (preserving pairing state — no new code).');
-          console.log('[WA]    auth_info_baileys/ NOT wiped — partial pairing state preserved.');
-          scheduleReconnect(5_000);   // freshLogin defaults to false → pairingCodeRequested preserved
+          console.log('[WA] Pairing failed, resetting state');
+          scheduleReconnect(5_000, { freshLogin: true });
           return;
         }
 
@@ -757,6 +780,11 @@ function attachHandlers(sock, saveCreds) {
         // Successful link — reset the pairing-attempt counter so the user
         // can always re-pair cleanly after a future logout.
         resetPairingAttempts();
+        pairingCodeRequested = false; // clear after successful link
+        pairingState = PairingState.CONNECTED;
+        if (_isNewLogin) {
+          console.log('[WA] Session restored');
+        }
         console.log(`\n✅ ${botConfig.name} connected! (sock#${sockId})`);
         console.log('═'.repeat(52));
         console.log(`  Version  : ${botConfig.version} ${botConfig.beta}`);
@@ -1014,11 +1042,10 @@ function attachHandlers(sock, saveCreds) {
 // scheduleReconnect — always via setTimeout, never from
 // inside an event handler, to prevent stacked async calls.
 //
-// opts.freshLogin = true  → connect() resets all pairing state
-//                           (use only after a confirmed post-link logout)
-// opts.freshLogin = false → connect() preserves pairingCodeRequested
-//                           so no second pairing code is generated when
-//                           we silently reconnect during an active pairing
+// opts.freshLogin = true/false → informational only.
+//   connect() ALWAYS resets pairingCodeRequested for the new socket.
+//   pairingCodeRequested belongs to a socket's lifecycle — it is never
+//   carried across socket boundaries.
 // ─────────────────────────────────────────────────────────
 function scheduleReconnect(delayMs, opts = {}) {
   if (reconnectTimer) {
@@ -1040,11 +1067,10 @@ function scheduleReconnect(delayMs, opts = {}) {
 //   5. Attach handlers
 //   6. Release mutex
 // ─────────────────────────────────────────────────────────
-// opts.freshLogin = true  → used after a confirmed post-link 401 logout;
-//                           resets all pairing state so a new code is requested.
-// opts.freshLogin = false → silent reconnect during an active pairing attempt;
-//                           pairingCodeRequested is preserved so the existing
-//                           code stays valid and no second code is generated.
+// opts.freshLogin = true/false → informational label only.
+//   pairingCodeRequested is ALWAYS reset at the top of connect() because it
+//   belongs to a socket's lifecycle — once the old socket is destroyed, any
+//   code it issued is invalid and the new socket must request a fresh one.
 async function connect({ freshLogin = false } = {}) {
   if (isConnecting) {
     console.log('[WA] connect() already in progress — skipping.');
@@ -1052,20 +1078,17 @@ async function connect({ freshLogin = false } = {}) {
   }
   isConnecting = true;
 
-  // Only reset pairingCodeRequested on an explicit freshLogin (post-link 401
-  // logout).  During any other reconnect — including silent socket restarts
-  // while the user is still entering the pairing code — the flag must be
-  // preserved so no second code is generated and the existing code stays valid.
-  if (freshLogin) {
-    console.log('[WA] Resetting pairingCodeRequested because freshLogin=true');
-    pairingCodeRequested = false;
-  }
-
-  if (pairingCodeRequested) {
-    console.log('[WA] connect() — preserving pairingCodeRequested=true (silent reconnect during pairing)');
-  } else {
-    console.log(`[WA] connect() — pairingCodeRequested = false (freshLogin: ${freshLogin})`);
-  }
+  // ── CRITICAL FIX: always reset pairingCodeRequested ─────────────────────
+  // pairingCodeRequested belongs to a single socket's lifecycle.
+  // connect() always destroys the old socket and creates a brand-new one.
+  // Any code issued by the previous socket is already invalid on WhatsApp's
+  // servers the moment that socket closes — preserving the flag across socket
+  // boundaries causes the new socket's QR events to be silently ignored
+  // ("already requested") and no code is ever generated on the new socket.
+  // The new socket ALWAYS needs a fresh requestPairingCode() call.
+  pairingCodeRequested = false;
+  pairingState = PairingState.IDLE;
+  console.log(`[WA] connect() — pairingCodeRequested reset for new socket (freshLogin: ${freshLogin})`);
 
   if (currentSock) {
     console.log('[WA] Destroying previous socket...');
