@@ -104,6 +104,130 @@ async function handleAI(args, sock, jid, opts = {}) {
   }
 }
 
+// ── Quoted-message helpers (Baileys v7 — matches converter.js / helpers.js) ──
+function getMessageContextInfo(message) {
+  const m = message?.message;
+  if (!m) return null;
+  return (
+    m.extendedTextMessage?.contextInfo ||
+    m.imageMessage?.contextInfo        ||
+    m.videoMessage?.contextInfo        ||
+    m.audioMessage?.contextInfo        ||
+    m.stickerMessage?.contextInfo      ||
+    m.documentMessage?.contextInfo     ||
+    null
+  );
+}
+
+/** Returns quotedMessage object if it contains an image, else null */
+function getQuotedImageMessage(message) {
+  const ctx = getMessageContextInfo(message);
+  const quoted = ctx?.quotedMessage;
+  if (!quoted) return null;
+  if (quoted.imageMessage) return quoted;
+  // view-once / ephemeral wrappers
+  const inner =
+    quoted.ephemeralMessage?.message ||
+    quoted.viewOnceMessage?.message ||
+    quoted.viewOnceMessageV2?.message ||
+    quoted.viewOnceMessageV2Extension?.message ||
+    null;
+  if (inner?.imageMessage) return inner;
+  return null;
+}
+
+/** Download quoted image buffer via Baileys (same pattern as converter.js) */
+async function downloadQuotedImageBuffer(sock, jid, message, quotedMsg) {
+  const { downloadMediaMessage } = require('baileys');
+  const ctx = getMessageContextInfo(message);
+  const fake = {
+    key: {
+      remoteJid:   jid,
+      id:          ctx?.stanzaId || message.key?.id,
+      participant: ctx?.participant || message.key?.participant,
+      fromMe:      false
+    },
+    message: quotedMsg
+  };
+  return downloadMediaMessage(fake, 'buffer', { reuploadRequest: sock.updateMediaMessage });
+}
+
+/** Detect mime from buffer magic bytes (fallback jpeg) */
+function detectImageMime(buf) {
+  if (!buf || buf.length < 4) return 'image/jpeg';
+  if (buf[0] === 0x89 && buf[1] === 0x50) return 'image/png';
+  if (buf[0] === 0xff && buf[1] === 0xd8) return 'image/jpeg';
+  if (buf[0] === 0x52 && buf[1] === 0x49) return 'image/webp';
+  return 'image/jpeg';
+}
+
+/**
+ * Image-to-image edit using Pollinations kontext (reference image URL required).
+ * Uploads buffer to a short-lived public host so Pollinations can fetch it.
+ */
+async function editImageWithPollinations(imageBuffer, prompt) {
+  const mime = detectImageMime(imageBuffer);
+  const ext  = mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg';
+  // Temporary public upload (no API key) — 0x0.st style hosts used by many bots
+  let publicUrl = null;
+  try {
+    const FormData = global.FormData || require('form-data');
+    const form = new FormData();
+    if (typeof Blob !== 'undefined') {
+      form.append('file', new Blob([imageBuffer], { type: mime }), `input.${ext}`);
+    } else {
+      form.append('file', imageBuffer, { filename: `input.${ext}`, contentType: mime });
+    }
+    const up = await axios.post('https://litterbox.catbox.moe/resources/internals/api.php', form, {
+      params: { time: '1h' },
+      headers: typeof form.getHeaders === 'function' ? form.getHeaders() : {},
+      timeout: 60000,
+      maxContentLength: 20 * 1024 * 1024
+    });
+    if (typeof up.data === 'string' && up.data.startsWith('http')) publicUrl = up.data.trim();
+  } catch (e) {
+    console.error('[Imagine] temp upload failed:', e.message);
+  }
+
+  if (!publicUrl) {
+    // Fallback: try 0x0.st
+    try {
+      const FormData = global.FormData || require('form-data');
+      const form = new FormData();
+      if (typeof Blob !== 'undefined') {
+        form.append('file', new Blob([imageBuffer], { type: mime }), `input.${ext}`);
+      } else {
+        form.append('file', imageBuffer, { filename: `input.${ext}`, contentType: mime });
+      }
+      const up = await axios.post('https://0x0.st', form, {
+        headers: typeof form.getHeaders === 'function' ? form.getHeaders() : {},
+        timeout: 60000
+      });
+      if (typeof up.data === 'string' && up.data.startsWith('http')) publicUrl = up.data.trim();
+    } catch (e2) {
+      console.error('[Imagine] 0x0.st upload failed:', e2.message);
+    }
+  }
+
+  if (!publicUrl) throw new Error('Could not host reference image for editing');
+
+  const encoded = encodeURIComponent(prompt);
+  const seed    = Math.floor(Math.random() * 999999);
+  const url = `https://image.pollinations.ai/prompt/${encoded}?model=kontext&image=${encodeURIComponent(publicUrl)}&width=512&height=512&nologo=true&seed=${seed}`;
+  const resp = await axios.get(url, {
+    responseType: 'arraybuffer',
+    timeout: 120000,
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      'Referer': 'https://pollinations.ai/',
+      'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8'
+    }
+  });
+  const ct = resp.headers['content-type'] || '';
+  if (!ct.startsWith('image/')) throw new Error('non-image response from image editor');
+  return Buffer.from(resp.data);
+}
+
 const aiCommands = {
   ai: {
     category: 'ai', desc: 'Ask AI (auto-selects best model)',
@@ -167,16 +291,64 @@ const aiCommands = {
     }
   },
   imagine: {
-    category: 'ai', desc: 'Generate an AI image — auto-detects anime vs photorealistic style',
-    usage: '.imagine <description>', aliases: [], permissions: 'all',
+    category: 'ai',
+    desc: 'Generate or edit an AI image — reply to an image to edit it, or text-only to generate',
+    usage: '.imagine <description>',
+    aliases: [],
+    permissions: 'all',
     examples: [
       '.imagine a futuristic city at night',
       '.imagine naruto in hokage robes',
-      '.imagine ronaldo lifting the world cup trophy'
+      '.imagine ronaldo lifting the world cup trophy',
+      '(reply to image) .imagine turn this into anime'
     ],
-    exec: async (args, sock, jid) => {
+    exec: async (args, sock, jid, _isGroup, _sender, message) => {
       const prompt = args.join(' ').trim();
-      if (!prompt) return sock.sendMessage(jid, { text: '❌ Usage: .imagine <description>' });
+      if (!prompt) {
+        return sock.sendMessage(jid, {
+          text: '❌ Please provide a description.\n\nUsage:\n.imagine <description>'
+        });
+      }
+
+      // ── Image-to-image path: user replied to an image ──────────────────
+      const quotedImage = message ? getQuotedImageMessage(message) : null;
+      if (quotedImage) {
+        await sock.sendMessage(jid, {
+          text: `🎨 *Imagine AI*\n\nEditing your image...\n\n_"${prompt}"_`
+        });
+        let tmpIn = null;
+        try {
+          console.log('[Imagine] Downloading quoted image for edit');
+          const imgBuf = await downloadQuotedImageBuffer(sock, jid, message, quotedImage);
+          if (!imgBuf || !imgBuf.length) {
+            return sock.sendMessage(jid, {
+              text: "❌ I couldn't read the image you replied to. Please try again."
+            });
+          }
+          tmpIn = path.join(os.tmpdir(), `imagine_input_${Date.now()}.jpg`);
+          fs.writeFileSync(tmpIn, imgBuf);
+
+          const edited = await editImageWithPollinations(imgBuf, prompt);
+          await sock.sendMessage(jid, {
+            image: edited,
+            caption: `🎨 *Imagine AI*\n\n_"${prompt}"_`
+          });
+          console.log('[Imagine] Edited image sent');
+        } catch (err) {
+          const safe = String(err.message || err).slice(0, 180);
+          console.error('[Imagine] Image edit failed:', safe);
+          await sock.sendMessage(jid, {
+            text: `❌ Image editing failed. ${safe.includes('read the image') ? safe : 'Please try again.'}`
+          });
+        } finally {
+          if (tmpIn) {
+            try { if (fs.existsSync(tmpIn)) fs.unlinkSync(tmpIn); } catch (_) {}
+          }
+        }
+        return;
+      }
+
+      // ── Text-only path (existing Pollinations generation — unchanged) ──
 
       // ── Detect whether the prompt calls for anime or photorealistic output ──
       const ANIME_KEYWORDS = [
@@ -341,18 +513,19 @@ const aiCommands = {
   },
   imaginevid: {
     category: 'ai',
-    desc: 'Generate an AI video from a text prompt',
+    desc: 'Generate an AI video from text, or animate a replied image with Runway',
     usage: '.imaginevid <description>',
     aliases: [],
     permissions: 'all',
     examples: [
-      '.imaginevid a dragon flying over a futuristic city'
+      '.imaginevid a dragon flying over a futuristic city',
+      '(reply to image) .imaginevid make the character slowly walk toward the camera'
     ],
-    exec: async (args, sock, jid) => {
+    exec: async (args, sock, jid, _isGroup, _sender, message) => {
       const prompt = args.join(' ').trim();
       if (!prompt) {
         return sock.sendMessage(jid, {
-          text: '❌ Please provide a video description.\n\nUsage:\n.imaginevid <description>'
+          text: '❌ Please provide a description.\n\nUsage:\n.imaginevid <description>'
         });
       }
 
@@ -363,38 +536,88 @@ const aiCommands = {
         });
       }
 
-      await sock.sendMessage(jid, {
-        text: `🎬 *Imagine Video AI*\n\nGenerating your video...\n\nPrompt:\n_"${prompt}"_`
-      });
+      const quotedImage = message ? getQuotedImageMessage(message) : null;
+      const isImageToVideo = !!quotedImage;
 
-      let tmpPath = null;
+      if (isImageToVideo) {
+        await sock.sendMessage(jid, {
+          text: `🎬 *Imagine Video AI*\n\nUsing your image as the starting frame...\n\n_"${prompt}"_`
+        });
+      } else {
+        await sock.sendMessage(jid, {
+          text: `🎬 *Imagine Video AI*\n\nGenerating your video...\n\nPrompt:\n_"${prompt}"_`
+        });
+      }
+
+      let tmpIn = null;
+      let tmpOut = null;
       try {
-        console.log('[ImagineVideo] Starting generation');
+        console.log(`[ImagineVideo] Starting generation (mode=${isImageToVideo ? 'image-to-video' : 'text-to-video'})`);
 
-        // Light cinematic guidance — preserve user intent, do not invent subjects
         const enhancedPrompt = `${prompt}, cinematic motion, natural movement, coherent subject motion, detailed lighting, high-quality composition`;
 
         const RunwayML = require('@runwayml/sdk').default || require('@runwayml/sdk');
         const client = new RunwayML({ apiKey });
 
-        // Create text-to-video task and wait (SDK polls internally)
-        // Timeout ~5 minutes so we never hang the process forever
         const MAX_WAIT_MS = 5 * 60 * 1000;
-        const createPromise = client.textToVideo
-          .create({
-            model: 'gen4.5',
-            promptText: enhancedPrompt,
-            ratio: '1280:720',
-            duration: 5
-          })
-          .waitForTaskOutput();
+        let createPromise;
+
+        if (isImageToVideo) {
+          console.log('[ImagineVideo] Downloading quoted image');
+          let imgBuf;
+          try {
+            imgBuf = await downloadQuotedImageBuffer(sock, jid, message, quotedImage);
+          } catch (dlErr) {
+            console.error('[ImagineVideo] Quoted image download failed:', dlErr.message);
+            return sock.sendMessage(jid, {
+              text: "❌ I couldn't read the image you replied to. Please try again."
+            });
+          }
+          if (!imgBuf || !imgBuf.length) {
+            return sock.sendMessage(jid, {
+              text: "❌ I couldn't read the image you replied to. Please try again."
+            });
+          }
+
+          // Keep under Runway data-URI limit (~5MB encoded ≈ ~3.3MB raw)
+          if (imgBuf.length > 3.2 * 1024 * 1024) {
+            console.log('[ImagineVideo] Image large; still attempting data URI');
+          }
+
+          tmpIn = path.join(os.tmpdir(), `imaginevid_input_${Date.now()}.jpg`);
+          fs.writeFileSync(tmpIn, imgBuf);
+
+          const mime = detectImageMime(imgBuf);
+          const dataUri = `data:${mime};base64,${imgBuf.toString('base64')}`;
+          console.log('[ImagineVideo] Creating image-to-video task');
+
+          createPromise = client.imageToVideo
+            .create({
+              model: 'gen4.5',
+              promptImage: dataUri,
+              promptText: enhancedPrompt,
+              ratio: '1280:720',
+              duration: 5
+            })
+            .waitForTaskOutput();
+        } else {
+          // Existing text-to-video path
+          createPromise = client.textToVideo
+            .create({
+              model: 'gen4.5',
+              promptText: enhancedPrompt,
+              ratio: '1280:720',
+              duration: 5
+            })
+            .waitForTaskOutput();
+        }
 
         const timeoutPromise = new Promise((_, reject) => {
           setTimeout(() => reject(new Error('TIMEOUT')), MAX_WAIT_MS);
         });
 
         const task = await Promise.race([createPromise, timeoutPromise]);
-        console.log(`[ImagineVideo] Task created / completed: ${task && task.id ? task.id : 'unknown'}`);
+        console.log(`[ImagineVideo] Task completed: ${task && task.id ? task.id : 'unknown'}`);
 
         if (!task || !task.output || !task.output.length) {
           throw new Error('No video output returned from Runway');
@@ -413,8 +636,8 @@ const aiCommands = {
         });
 
         const buffer = Buffer.from(resp.data);
-        tmpPath = path.join(os.tmpdir(), `imaginevid_${Date.now()}.mp4`);
-        fs.writeFileSync(tmpPath, buffer);
+        tmpOut = path.join(os.tmpdir(), `imaginevid_${Date.now()}.mp4`);
+        fs.writeFileSync(tmpOut, buffer);
 
         console.log('[ImagineVideo] Sending video');
         await sock.sendMessage(jid, {
@@ -422,8 +645,7 @@ const aiCommands = {
           mimetype: 'video/mp4',
           caption: `🎬 *Imagine Video AI*\n\n_"${prompt}"_`
         });
-
-        console.log('[ImagineVideo] Temporary file deleted');
+        console.log('[ImagineVideo] Video sent');
       } catch (err) {
         const msg = (err && err.message) ? String(err.message) : 'Unknown error';
         if (msg === 'TIMEOUT' || /timeout/i.test(msg)) {
@@ -435,23 +657,23 @@ const aiCommands = {
             text: '❌ The video was generated, but I couldn\'t send it to WhatsApp.'
           });
         } else {
-          // Never expose API key or auth headers
           const safe = msg
             .replace(/key_[a-f0-9]+/gi, '[REDACTED]')
             .replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]')
             .slice(0, 200);
           console.error('[ImagineVideo] Generation failed:', safe);
           await sock.sendMessage(jid, {
-            text: `❌ Video generation failed.\n${safe}`
+            text: '❌ Video generation failed.\nTry again with another prompt.'
           });
         }
       } finally {
-        if (tmpPath) {
+        for (const f of [tmpIn, tmpOut]) {
+          if (!f) continue;
           try {
-            if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
-            console.log('[ImagineVideo] Temporary file deleted');
-          } catch (_) { /* ignore cleanup errors */ }
+            if (fs.existsSync(f)) fs.unlinkSync(f);
+          } catch (_) { /* ignore */ }
         }
+        console.log('[ImagineVideo] Temporary files cleaned');
       }
     }
   }
