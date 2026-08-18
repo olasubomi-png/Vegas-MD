@@ -150,20 +150,62 @@ function hasQuotedMessage(message) {
   return !!(ctx && ctx.quotedMessage);
 }
 
-/** Download quoted image buffer via Baileys (same pattern as converter.js) */
+/**
+ * Download quoted image buffer.
+ * Prefer downloadContentFromMessage on imageMessage (works for bot's own
+ * images in "Message yourself" chats). Fall back to downloadMediaMessage.
+ */
 async function downloadQuotedImageBuffer(sock, jid, message, quotedMsg) {
-  const { downloadMediaMessage } = require('baileys');
+  const { downloadContentFromMessage, downloadMediaMessage } = require('baileys');
+
+  const imgMsg =
+    quotedMsg?.imageMessage ||
+    unwrapMessageContent(quotedMsg)?.imageMessage ||
+    null;
+
+  if (imgMsg) {
+    try {
+      const stream = await downloadContentFromMessage(imgMsg, 'image');
+      const chunks = [];
+      for await (const chunk of stream) chunks.push(chunk);
+      const buf = Buffer.concat(chunks);
+      if (buf.length > 0) {
+        console.log(`[GROK IMAGE EDIT] downloaded via content stream (${buf.length} bytes)`);
+        return buf;
+      }
+    } catch (e1) {
+      console.error('[GROK IMAGE EDIT] downloadContentFromMessage failed:', e1.message);
+    }
+  }
+
   const ctx = getMessageContextInfo(message);
-  const fake = {
-    key: {
-      remoteJid:   jid,
-      id:          ctx?.stanzaId || message.key?.id,
-      participant: ctx?.participant || message.key?.participant,
-      fromMe:      false
-    },
-    message: quotedMsg
-  };
-  return downloadMediaMessage(fake, 'buffer', { reuploadRequest: sock.updateMediaMessage });
+  const participant = ctx?.participant || message.key?.participant;
+  const attempts = [true, false]; // try fromMe true first (bot-sent image in self chat)
+
+  for (const fromMe of attempts) {
+    const fake = {
+      key: {
+        remoteJid: jid,
+        id: ctx?.stanzaId || message.key?.id,
+        participant,
+        fromMe
+      },
+      message: quotedMsg
+    };
+    try {
+      const buf = await downloadMediaMessage(fake, 'buffer', {
+        reuploadRequest: sock.updateMediaMessage
+      });
+      if (buf && buf.length) {
+        console.log(`[GROK IMAGE EDIT] downloaded via downloadMediaMessage fromMe=${fromMe} (${buf.length} bytes)`);
+        return buf;
+      }
+    } catch (e2) {
+      console.error(`[GROK IMAGE EDIT] downloadMediaMessage fromMe=${fromMe} failed:`, e2.message);
+    }
+  }
+
+  throw new Error('Could not download quoted image from WhatsApp');
 }
 
 /** Detect mime from buffer magic bytes (fallback jpeg) */
@@ -179,7 +221,7 @@ const MAX_EDIT_IMAGE_BYTES = 4 * 1024 * 1024; // 4MB before base64
 
 /**
  * Edit an image with xAI Grok Imagine (official REST API).
- * Sends the image as a base64 data URI — no public temp host needed.
+ * Sends the image as a base64 data URI. Requests b64_json when possible.
  * Env: XAI_API_KEY or GROK_API_KEY
  */
 async function editImageWithGrok(imageBuffer, prompt) {
@@ -195,6 +237,7 @@ async function editImageWithGrok(imageBuffer, prompt) {
   const mime = detectImageMime(imageBuffer);
   console.log(`[GROK IMAGE EDIT] mime: ${mime}`);
   console.log(`[GROK IMAGE EDIT] buffer size: ${imageBuffer.length}`);
+  console.log(`[GROK IMAGE EDIT] key present: yes (len=${apiKey.length})`);
 
   if (imageBuffer.length > MAX_EDIT_IMAGE_BYTES) {
     throw new Error(
@@ -203,76 +246,96 @@ async function editImageWithGrok(imageBuffer, prompt) {
   }
 
   const dataUri = `data:${mime};base64,${imageBuffer.toString('base64')}`;
-  console.log('[GROK IMAGE EDIT] sending image to Grok');
+  const models = [
+    process.env.GROK_IMAGE_MODEL,
+    'grok-imagine-image-2.0',
+    'grok-imagine-image-quality',
+    'grok-imagine-image'
+  ].filter(Boolean);
+  // unique
+  const modelList = [...new Set(models)];
 
-  const model = process.env.GROK_IMAGE_MODEL || 'grok-imagine-image-2.0';
-
-  let resp;
-  try {
-    resp = await axios.post(
-      'https://api.x.ai/v1/images/edits',
-      {
-        model,
-        prompt,
-        image: {
-          url: dataUri,
-          type: 'image_url'
-        }
-      },
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`
+  let lastErr = null;
+  for (const model of modelList) {
+    console.log(`[GROK IMAGE EDIT] trying model: ${model}`);
+    try {
+      const resp = await axios.post(
+        'https://api.x.ai/v1/images/edits',
+        {
+          model,
+          prompt,
+          response_format: 'b64_json',
+          image: {
+            url: dataUri,
+            type: 'image_url'
+          }
         },
-        timeout: 180000,
-        maxBodyLength: 15 * 1024 * 1024,
-        maxContentLength: 20 * 1024 * 1024
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${apiKey}`
+          },
+          timeout: 180000,
+          maxBodyLength: 20 * 1024 * 1024,
+          maxContentLength: 25 * 1024 * 1024
+        }
+      );
+
+      const data = resp.data;
+      if (data?.block_reason) {
+        throw new Error(`blocked by moderation: ${data.block_reason}`);
       }
-    );
-  } catch (err) {
-    const status = err.response?.status;
-    const body = err.response?.data;
-    let detail = err.message;
-    if (body) {
-      try {
-        detail = typeof body === 'string' ? body : JSON.stringify(body);
-      } catch (_) { /* keep */ }
+
+      const item = Array.isArray(data?.data) ? data.data[0] : null;
+      if (!item) {
+        console.error('[GROK IMAGE EDIT] unexpected response keys:', Object.keys(data || {}));
+        throw new Error('Grok returned no image data');
+      }
+
+      if (item.b64_json) {
+        console.log('[GROK IMAGE EDIT] received base64 image');
+        return Buffer.from(item.b64_json, 'base64');
+      }
+
+      if (item.url) {
+        console.log('[GROK IMAGE EDIT] downloading result URL');
+        const imgResp = await axios.get(item.url, {
+          responseType: 'arraybuffer',
+          timeout: 120000,
+          headers: { 'User-Agent': 'Mozilla/5.0' }
+        });
+        return Buffer.from(imgResp.data);
+      }
+
+      throw new Error('Grok response missing url and b64_json');
+    } catch (err) {
+      const status = err.response?.status;
+      const body = err.response?.data;
+      let detail = err.message;
+      if (body) {
+        try {
+          detail = typeof body === 'string' ? body : JSON.stringify(body);
+        } catch (_) { /* keep */ }
+      }
+      const safe = String(detail)
+        .replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]')
+        .replace(/xai-[A-Za-z0-9_-]+/g, '[REDACTED]')
+        .replace(/data:image\/[^;]+;base64,[A-Za-z0-9+/=]+/g, 'data:image/...[REDACTED]')
+        .slice(0, 400);
+      console.error(`[GROK IMAGE EDIT] model=${model} status=${status || 'n/a'}: ${safe}`);
+      lastErr = new Error(
+        status === 401 || status === 403
+          ? `Grok API ${status} (check API key / billing)`
+          : status
+            ? `Grok API ${status}: ${safe.slice(0, 120)}`
+            : safe.slice(0, 120)
+      );
+      // only retry other models on 400/404 model errors
+      if (status && status !== 400 && status !== 404) break;
     }
-    const safe = String(detail)
-      .replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]')
-      .replace(/xai-[A-Za-z0-9_-]+/g, '[REDACTED]')
-      .slice(0, 400);
-    console.error(`[GROK IMAGE EDIT] API error status=${status || 'n/a'}: ${safe}`);
-    throw new Error(status ? `Grok API ${status}` : 'Grok API request failed');
   }
 
-  const data = resp.data;
-  const item = Array.isArray(data?.data) ? data.data[0] : null;
-  if (!item) {
-    console.error('[GROK IMAGE EDIT] unexpected response keys:', Object.keys(data || {}));
-    throw new Error('Grok returned no image data');
-  }
-
-  if (item.b64_json) {
-    console.log('[GROK IMAGE EDIT] received base64 image');
-    return Buffer.from(item.b64_json, 'base64');
-  }
-
-  if (item.url) {
-    console.log('[GROK IMAGE EDIT] downloading result URL');
-    const imgResp = await axios.get(item.url, {
-      responseType: 'arraybuffer',
-      timeout: 120000,
-      headers: { 'User-Agent': 'Mozilla/5.0' }
-    });
-    const ct = imgResp.headers['content-type'] || '';
-    if (ct && !ct.startsWith('image/') && !ct.includes('octet-stream')) {
-      throw new Error('Grok result was not an image');
-    }
-    return Buffer.from(imgResp.data);
-  }
-
-  throw new Error('Grok response missing url and b64_json');
+  throw lastErr || new Error('Grok API request failed');
 }
 
 const aiCommands = {
@@ -401,19 +464,24 @@ const aiCommands = {
         } catch (err) {
           const safe = String(err.message || err)
             .replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]')
+            .replace(/xai-[A-Za-z0-9_-]+/g, '[REDACTED]')
             .slice(0, 200);
           console.error('[GROK IMAGE EDIT] failed:', safe);
           if (/not configured/i.test(safe)) {
             await sock.sendMessage(jid, {
-              text: '❌ Image editing is not configured. Set XAI_API_KEY or GROK_API_KEY in .env'
+              text: '❌ Image editing is not configured. Set XAI_API_KEY or GROK_API_KEY in .env then restart the bot.'
             });
-          } else if (/couldn.?t read|empty image/i.test(safe)) {
+          } else if (/download|couldn.?t read|empty image|quoted image/i.test(safe)) {
             await sock.sendMessage(jid, {
               text: "❌ I couldn't read the image you replied to. Please try again."
             });
+          } else if (/401|403|API key|billing/i.test(safe)) {
+            await sock.sendMessage(jid, {
+              text: '❌ Grok API rejected the key (401/403). Check XAI_API_KEY / GROK_API_KEY and account billing.'
+            });
           } else {
             await sock.sendMessage(jid, {
-              text: '❌ Image editing failed. Please try again.'
+              text: `❌ Image editing failed.\n${safe.slice(0, 150)}`
             });
           }
         } finally {
