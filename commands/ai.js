@@ -119,21 +119,35 @@ function getMessageContextInfo(message) {
   );
 }
 
-/** Returns quotedMessage object if it contains an image, else null */
+/** Unwrap ephemeral / view-once containers */
+function unwrapMessageContent(msg) {
+  if (!msg || typeof msg !== 'object') return null;
+  return (
+    msg.ephemeralMessage?.message ||
+    msg.ephemeralMessageV2Extension?.message ||
+    msg.viewOnceMessage?.message ||
+    msg.viewOnceMessageV2?.message ||
+    msg.viewOnceMessageV2Extension?.message ||
+    msg.documentWithCaptionMessage?.message ||
+    msg
+  );
+}
+
+/** Returns a message object with imageMessage when the user replied to an image */
 function getQuotedImageMessage(message) {
   const ctx = getMessageContextInfo(message);
   const quoted = ctx?.quotedMessage;
   if (!quoted) return null;
   if (quoted.imageMessage) return quoted;
-  // view-once / ephemeral wrappers
-  const inner =
-    quoted.ephemeralMessage?.message ||
-    quoted.viewOnceMessage?.message ||
-    quoted.viewOnceMessageV2?.message ||
-    quoted.viewOnceMessageV2Extension?.message ||
-    null;
+  const inner = unwrapMessageContent(quoted);
   if (inner?.imageMessage) return inner;
   return null;
+}
+
+/** True when the user replied to any message */
+function hasQuotedMessage(message) {
+  const ctx = getMessageContextInfo(message);
+  return !!(ctx && ctx.quotedMessage);
 }
 
 /** Download quoted image buffer via Baileys (same pattern as converter.js) */
@@ -157,75 +171,108 @@ function detectImageMime(buf) {
   if (!buf || buf.length < 4) return 'image/jpeg';
   if (buf[0] === 0x89 && buf[1] === 0x50) return 'image/png';
   if (buf[0] === 0xff && buf[1] === 0xd8) return 'image/jpeg';
-  if (buf[0] === 0x52 && buf[1] === 0x49) return 'image/webp';
+  if (buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46) return 'image/webp';
   return 'image/jpeg';
 }
 
+const MAX_EDIT_IMAGE_BYTES = 4 * 1024 * 1024; // 4MB before base64
+
 /**
- * Image-to-image edit using Pollinations kontext (reference image URL required).
- * Uploads buffer to a short-lived public host so Pollinations can fetch it.
+ * Edit an image with xAI Grok Imagine (official REST API).
+ * Sends the image as a base64 data URI — no public temp host needed.
+ * Env: XAI_API_KEY or GROK_API_KEY
  */
-async function editImageWithPollinations(imageBuffer, prompt) {
+async function editImageWithGrok(imageBuffer, prompt) {
+  const apiKey = process.env.XAI_API_KEY || process.env.GROK_API_KEY;
+  if (!apiKey) {
+    throw new Error('XAI_API_KEY / GROK_API_KEY is not configured');
+  }
+
+  if (!imageBuffer || !Buffer.isBuffer(imageBuffer) || imageBuffer.length === 0) {
+    throw new Error('Empty image buffer');
+  }
+
   const mime = detectImageMime(imageBuffer);
-  const ext  = mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg';
-  // Temporary public upload (no API key) — 0x0.st style hosts used by many bots
-  let publicUrl = null;
+  console.log(`[GROK IMAGE EDIT] mime: ${mime}`);
+  console.log(`[GROK IMAGE EDIT] buffer size: ${imageBuffer.length}`);
+
+  if (imageBuffer.length > MAX_EDIT_IMAGE_BYTES) {
+    throw new Error(
+      `Image too large (${Math.round(imageBuffer.length / 1024)}KB). Max is ${MAX_EDIT_IMAGE_BYTES / 1024}KB`
+    );
+  }
+
+  const dataUri = `data:${mime};base64,${imageBuffer.toString('base64')}`;
+  console.log('[GROK IMAGE EDIT] sending image to Grok');
+
+  const model = process.env.GROK_IMAGE_MODEL || 'grok-imagine-image-2.0';
+
+  let resp;
   try {
-    const FormData = global.FormData || require('form-data');
-    const form = new FormData();
-    if (typeof Blob !== 'undefined') {
-      form.append('file', new Blob([imageBuffer], { type: mime }), `input.${ext}`);
-    } else {
-      form.append('file', imageBuffer, { filename: `input.${ext}`, contentType: mime });
-    }
-    const up = await axios.post('https://litterbox.catbox.moe/resources/internals/api.php', form, {
-      params: { time: '1h' },
-      headers: typeof form.getHeaders === 'function' ? form.getHeaders() : {},
-      timeout: 60000,
-      maxContentLength: 20 * 1024 * 1024
-    });
-    if (typeof up.data === 'string' && up.data.startsWith('http')) publicUrl = up.data.trim();
-  } catch (e) {
-    console.error('[Imagine] temp upload failed:', e.message);
-  }
-
-  if (!publicUrl) {
-    // Fallback: try 0x0.st
-    try {
-      const FormData = global.FormData || require('form-data');
-      const form = new FormData();
-      if (typeof Blob !== 'undefined') {
-        form.append('file', new Blob([imageBuffer], { type: mime }), `input.${ext}`);
-      } else {
-        form.append('file', imageBuffer, { filename: `input.${ext}`, contentType: mime });
+    resp = await axios.post(
+      'https://api.x.ai/v1/images/edits',
+      {
+        model,
+        prompt,
+        image: {
+          url: dataUri,
+          type: 'image_url'
+        }
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`
+        },
+        timeout: 180000,
+        maxBodyLength: 15 * 1024 * 1024,
+        maxContentLength: 20 * 1024 * 1024
       }
-      const up = await axios.post('https://0x0.st', form, {
-        headers: typeof form.getHeaders === 'function' ? form.getHeaders() : {},
-        timeout: 60000
-      });
-      if (typeof up.data === 'string' && up.data.startsWith('http')) publicUrl = up.data.trim();
-    } catch (e2) {
-      console.error('[Imagine] 0x0.st upload failed:', e2.message);
+    );
+  } catch (err) {
+    const status = err.response?.status;
+    const body = err.response?.data;
+    let detail = err.message;
+    if (body) {
+      try {
+        detail = typeof body === 'string' ? body : JSON.stringify(body);
+      } catch (_) { /* keep */ }
     }
+    const safe = String(detail)
+      .replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]')
+      .replace(/xai-[A-Za-z0-9_-]+/g, '[REDACTED]')
+      .slice(0, 400);
+    console.error(`[GROK IMAGE EDIT] API error status=${status || 'n/a'}: ${safe}`);
+    throw new Error(status ? `Grok API ${status}` : 'Grok API request failed');
   }
 
-  if (!publicUrl) throw new Error('Could not host reference image for editing');
+  const data = resp.data;
+  const item = Array.isArray(data?.data) ? data.data[0] : null;
+  if (!item) {
+    console.error('[GROK IMAGE EDIT] unexpected response keys:', Object.keys(data || {}));
+    throw new Error('Grok returned no image data');
+  }
 
-  const encoded = encodeURIComponent(prompt);
-  const seed    = Math.floor(Math.random() * 999999);
-  const url = `https://image.pollinations.ai/prompt/${encoded}?model=kontext&image=${encodeURIComponent(publicUrl)}&width=512&height=512&nologo=true&seed=${seed}`;
-  const resp = await axios.get(url, {
-    responseType: 'arraybuffer',
-    timeout: 120000,
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      'Referer': 'https://pollinations.ai/',
-      'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8'
+  if (item.b64_json) {
+    console.log('[GROK IMAGE EDIT] received base64 image');
+    return Buffer.from(item.b64_json, 'base64');
+  }
+
+  if (item.url) {
+    console.log('[GROK IMAGE EDIT] downloading result URL');
+    const imgResp = await axios.get(item.url, {
+      responseType: 'arraybuffer',
+      timeout: 120000,
+      headers: { 'User-Agent': 'Mozilla/5.0' }
+    });
+    const ct = imgResp.headers['content-type'] || '';
+    if (ct && !ct.startsWith('image/') && !ct.includes('octet-stream')) {
+      throw new Error('Grok result was not an image');
     }
-  });
-  const ct = resp.headers['content-type'] || '';
-  if (!ct.startsWith('image/')) throw new Error('non-image response from image editor');
-  return Buffer.from(resp.data);
+    return Buffer.from(imgResp.data);
+  }
+
+  throw new Error('Grok response missing url and b64_json');
 }
 
 const aiCommands = {
@@ -310,36 +357,65 @@ const aiCommands = {
         });
       }
 
-      // ── Image-to-image path: user replied to an image ──────────────────
-      const quotedImage = message ? getQuotedImageMessage(message) : null;
-      if (quotedImage) {
+      // ── Reply path: must be an image for editing ──────────────────────
+      if (message && hasQuotedMessage(message)) {
+        const quotedImage = getQuotedImageMessage(message);
+        if (!quotedImage) {
+          return sock.sendMessage(jid, {
+            text: '❌ Please reply to an image when using .imagine for image editing.'
+          });
+        }
+
         await sock.sendMessage(jid, {
           text: `🎨 *Imagine AI*\n\nEditing your image...\n\n_"${prompt}"_`
         });
+
         let tmpIn = null;
         try {
-          console.log('[Imagine] Downloading quoted image for edit');
+          console.log('[GROK IMAGE EDIT] quoted image detected');
           const imgBuf = await downloadQuotedImageBuffer(sock, jid, message, quotedImage);
-          if (!imgBuf || !imgBuf.length) {
+          if (!imgBuf || !Buffer.isBuffer(imgBuf) || imgBuf.length === 0) {
+            console.error('[GROK IMAGE EDIT] empty buffer after download');
             return sock.sendMessage(jid, {
               text: "❌ I couldn't read the image you replied to. Please try again."
             });
           }
+
+          const mime = detectImageMime(imgBuf);
+          if (!mime.startsWith('image/')) {
+            console.error('[GROK IMAGE EDIT] non-image mime after download:', mime);
+            return sock.sendMessage(jid, {
+              text: "❌ I couldn't read the image you replied to. Please try again."
+            });
+          }
+
           tmpIn = path.join(os.tmpdir(), `imagine_input_${Date.now()}.jpg`);
           fs.writeFileSync(tmpIn, imgBuf);
 
-          const edited = await editImageWithPollinations(imgBuf, prompt);
+          const edited = await editImageWithGrok(imgBuf, prompt);
           await sock.sendMessage(jid, {
             image: edited,
-            caption: `🎨 *Imagine AI*\n\n_"${prompt}"_`
+            caption: `🎨 *Grok Image Edit*\n\n${prompt}`
           });
-          console.log('[Imagine] Edited image sent');
+          console.log('[GROK IMAGE EDIT] edited image sent');
         } catch (err) {
-          const safe = String(err.message || err).slice(0, 180);
-          console.error('[Imagine] Image edit failed:', safe);
-          await sock.sendMessage(jid, {
-            text: `❌ Image editing failed. ${safe.includes('read the image') ? safe : 'Please try again.'}`
-          });
+          const safe = String(err.message || err)
+            .replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]')
+            .slice(0, 200);
+          console.error('[GROK IMAGE EDIT] failed:', safe);
+          if (/not configured/i.test(safe)) {
+            await sock.sendMessage(jid, {
+              text: '❌ Image editing is not configured. Set XAI_API_KEY or GROK_API_KEY in .env'
+            });
+          } else if (/couldn.?t read|empty image/i.test(safe)) {
+            await sock.sendMessage(jid, {
+              text: "❌ I couldn't read the image you replied to. Please try again."
+            });
+          } else {
+            await sock.sendMessage(jid, {
+              text: '❌ Image editing failed. Please try again.'
+            });
+          }
         } finally {
           if (tmpIn) {
             try { if (fs.existsSync(tmpIn)) fs.unlinkSync(tmpIn); } catch (_) {}
