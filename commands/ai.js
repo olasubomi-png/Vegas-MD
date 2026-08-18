@@ -1,6 +1,9 @@
 'use strict';
 // commands/ai.js — AI commands with multi-provider support + pollinations fallback
 const axios = require('axios');
+const fs    = require('fs');
+const path  = require('path');
+const os    = require('os');
 
 async function askOpenAI(query, model = 'gpt-3.5-turbo') {
   const { OpenAI } = require('openai');
@@ -334,6 +337,122 @@ const aiCommands = {
         [`Summarize the following in 3-5 bullet points:\n\n${text}`],
         sock, jid, { label: 'Summarize', provider: 'auto' }
       );
+    }
+  },
+  imaginevid: {
+    category: 'ai',
+    desc: 'Generate an AI video from a text prompt',
+    usage: '.imaginevid <description>',
+    aliases: [],
+    permissions: 'all',
+    examples: [
+      '.imaginevid a dragon flying over a futuristic city'
+    ],
+    exec: async (args, sock, jid) => {
+      const prompt = args.join(' ').trim();
+      if (!prompt) {
+        return sock.sendMessage(jid, {
+          text: '❌ Please provide a video description.\n\nUsage:\n.imaginevid <description>'
+        });
+      }
+
+      const apiKey = process.env.RUNWAY_API_KEY;
+      if (!apiKey) {
+        return sock.sendMessage(jid, {
+          text: '❌ Runway API key is not configured.'
+        });
+      }
+
+      await sock.sendMessage(jid, {
+        text: `🎬 *Imagine Video AI*\n\nGenerating your video...\n\nPrompt:\n_"${prompt}"_`
+      });
+
+      let tmpPath = null;
+      try {
+        console.log('[ImagineVideo] Starting generation');
+
+        // Light cinematic guidance — preserve user intent, do not invent subjects
+        const enhancedPrompt = `${prompt}, cinematic motion, natural movement, coherent subject motion, detailed lighting, high-quality composition`;
+
+        const RunwayML = require('@runwayml/sdk').default || require('@runwayml/sdk');
+        const client = new RunwayML({ apiKey });
+
+        // Create text-to-video task and wait (SDK polls internally)
+        // Timeout ~5 minutes so we never hang the process forever
+        const MAX_WAIT_MS = 5 * 60 * 1000;
+        const createPromise = client.textToVideo
+          .create({
+            model: 'gen4.5',
+            promptText: enhancedPrompt,
+            ratio: '1280:720',
+            duration: 5
+          })
+          .waitForTaskOutput();
+
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('TIMEOUT')), MAX_WAIT_MS);
+        });
+
+        const task = await Promise.race([createPromise, timeoutPromise]);
+        console.log(`[ImagineVideo] Task created / completed: ${task && task.id ? task.id : 'unknown'}`);
+
+        if (!task || !task.output || !task.output.length) {
+          throw new Error('No video output returned from Runway');
+        }
+
+        const videoUrl = task.output[0];
+        console.log('[ImagineVideo] Generation completed');
+        console.log('[ImagineVideo] Downloading video');
+
+        const resp = await axios.get(videoUrl, {
+          responseType: 'arraybuffer',
+          timeout: 120000,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+          }
+        });
+
+        const buffer = Buffer.from(resp.data);
+        tmpPath = path.join(os.tmpdir(), `imaginevid_${Date.now()}.mp4`);
+        fs.writeFileSync(tmpPath, buffer);
+
+        console.log('[ImagineVideo] Sending video');
+        await sock.sendMessage(jid, {
+          video: buffer,
+          mimetype: 'video/mp4',
+          caption: `🎬 *Imagine Video AI*\n\n_"${prompt}"_`
+        });
+
+        console.log('[ImagineVideo] Temporary file deleted');
+      } catch (err) {
+        const msg = (err && err.message) ? String(err.message) : 'Unknown error';
+        if (msg === 'TIMEOUT' || /timeout/i.test(msg)) {
+          await sock.sendMessage(jid, {
+            text: '⏱️ Video generation timed out. Please try again with a shorter or simpler prompt.'
+          });
+        } else if (/send|whatsapp|baileys/i.test(msg)) {
+          await sock.sendMessage(jid, {
+            text: '❌ The video was generated, but I couldn\'t send it to WhatsApp.'
+          });
+        } else {
+          // Never expose API key or auth headers
+          const safe = msg
+            .replace(/key_[a-f0-9]+/gi, '[REDACTED]')
+            .replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]')
+            .slice(0, 200);
+          console.error('[ImagineVideo] Generation failed:', safe);
+          await sock.sendMessage(jid, {
+            text: `❌ Video generation failed.\n${safe}`
+          });
+        }
+      } finally {
+        if (tmpPath) {
+          try {
+            if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+            console.log('[ImagineVideo] Temporary file deleted');
+          } catch (_) { /* ignore cleanup errors */ }
+        }
+      }
     }
   }
 };
