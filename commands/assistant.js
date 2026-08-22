@@ -174,7 +174,42 @@ async function handleFreeChat({ text, sock, jid, sender, botConfig, isGroup, mes
   return true;
 }
 
+async function handleChat(args, sock, jid, _isGroup, _sender, message, botConfig) {
+  const query = trimText(args.join(' ').trim() || extractQuotedText(message));
+  if (!query) {
+    return sock.sendMessage(jid, {
+      text: '💬 *AI Chat*\n\nUsage: .chat <message>\nExample: .chat Explain how WhatsApp bots work.'
+    });
+  }
+
+  const key = getConversationKey(botConfig?.ownerJid || botConfig?.ownerNumber, jid);
+  const history = getHistory(key);
+  const nextHistory = [...history, { role: 'user', content: query }];
+  await sock.sendPresenceUpdate('composing', jid).catch(() => {});
+  try {
+    const answer = await askText([
+      { role: 'system', content: getFreeChatSystemPrompt(botConfig?.name || 'Vegas-MD') },
+      ...nextHistory,
+    ], { model: process.env.FREE_CHAT_AI_MODEL || process.env.AI_MODEL || 'gpt-4o-mini', maxTokens: 900 });
+    setHistory(key, [...nextHistory, { role: 'assistant', content: answer }]);
+    await sock.sendMessage(jid, { text: answer });
+  } catch (error) {
+    console.error('[assistant] chat request failed:', error.message);
+    await sock.sendMessage(jid, {
+      text: '❌ I could not reach the AI chat service right now. Please try again later.'
+    });
+  } finally {
+    await sock.sendPresenceUpdate('paused', jid).catch(() => {});
+  }
+}
+
 const assistantCommands = {
+  chat: {
+    category: 'ai', reaction: '💬', desc: 'Have a conversational AI chat with bounded memory',
+    usage: '.chat <message>', aliases: ['aichat', 'talkai'], permissions: 'all',
+    examples: ['.chat Explain how APIs work', '.chat Help me plan a study schedule'],
+    exec: handleChat,
+  },
   code: {
     category: 'ai', reaction: '💻', desc: 'Get coding help, code reviews, bug fixes, and implementation ideas',
     usage: '.code <question or code>', aliases: ['coding', 'debug'], permissions: 'all',

@@ -183,7 +183,8 @@ Vegas-MD now includes an optional assistant layer:
 
 | Command | Purpose |
 |---|---|
-| `.code <question or code>` | Explain programming concepts, review code, diagnose errors, and propose fixes or tests. |
+| `.chat <message>` / `.aichat` | Ask the AI a conversational question with bounded memory. |
+| `.code <question or code>` / `.coding` / `.debug` | Explain programming concepts, review code, diagnose errors, and propose fixes or tests. |
 | `.speak <text>` | Generate spoken audio with an OpenAI voice. Use `.speak --voice nova <text>` to select a supported voice. |
 | `.play <song name>` / `.song <song name>` | Search YouTube and send the track as audio, using `yt-dlp` first and public search fallbacks when needed. |
 | `.freechat on` | Owner-only switch that enables natural replies to ordinary private-chat messages. |

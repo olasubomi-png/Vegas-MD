@@ -1,7 +1,7 @@
 'use strict';
 
 const commands = require('../commands');
-const required = ['code', 'speak', 'freechat', 'freechatgroups', 'play'];
+const required = ['pinterest', 'pin', 'chat', 'aichat', 'code', 'coding', 'speak', 'freechat', 'freechatgroups', 'vibe', 'workrepo', 'play'];
 for (const name of required) {
   if (!commands[name] || typeof commands[name].exec !== 'function') {
     throw new Error(`Missing command: ${name}`);
