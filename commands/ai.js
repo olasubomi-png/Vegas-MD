@@ -4,6 +4,7 @@ const axios = require('axios');
 const fs    = require('fs');
 const path  = require('path');
 const os    = require('os');
+const { generateZstImage } = require('../lib/zst-image');
 
 async function askOpenAI(query, model = 'gpt-3.5-turbo') {
   const { OpenAI } = require('openai');
@@ -586,8 +587,19 @@ const aiCommands = {
               image:   Buffer.from(resp3.data),
               caption: `${modeLabel} *Imagine AI*\n\n_"${prompt}"_`
             });
-          } catch (err) {
-            await sock.sendMessage(jid, { text: `❌ Image generation failed after 3 attempts: ${err.message}` });
+          } catch (lastErr) {
+            // ── Final fallback: supplied ZST DeepAI image endpoint ───────
+            try {
+              const generated = await generateZstImage(prompt);
+              await sock.sendMessage(jid, {
+                image: generated.buffer,
+                mimetype: generated.contentType || 'image/jpeg',
+                caption: `🧠 *ZST DeepAI Image*\n\n_${prompt}_`
+              });
+            } catch (zstErr) {
+              console.error('[IMAGINE] ZST fallback failed:', zstErr.message);
+              await sock.sendMessage(jid, { text: `❌ Image generation failed after all providers: ${zstErr.message || lastErr.message}` });
+            }
           }
         }
       }

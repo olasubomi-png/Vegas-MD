@@ -1,6 +1,16 @@
 // ── Load .env FIRST so every subsequent require sees the vars ────────────────
 require('dotenv').config();
 
+// Load encrypted, owner-managed secrets before plugins read API keys.
+// SECRET_STORE_KEY itself must remain in the host secret manager or .env.local;
+// it is never stored inside the encrypted file.
+try {
+  const { loadSecretsIntoEnv } = require('./lib/secret-store');
+  loadSecretsIntoEnv();
+} catch (error) {
+  console.warn(`[secrets] ${error.message}`);
+}
+
 const fs = require('fs');
 const path = require('path');
 

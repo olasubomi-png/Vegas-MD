@@ -7,5 +7,7 @@ package-lock.json
 dist/
 build/
 .env
+.secrets.enc.json
+.secrets.enc.json.*
 .pairing_attempts.json
 .bot.lock

@@ -130,6 +130,11 @@ olasubomi-md-bot/
 .joke
 .promote @user
 .play Never Gonna Give You Up
+.pinterest naruto 3
+.pindl https://www.pinterest.com/pin/123456789/
+.danimesearch naruto 2
+.dwallpaper dark phone wallpaper 3
+.aimusic cinematic piano soundtrack --instrumental
 .font Hello World
 ```
 
@@ -186,10 +191,25 @@ Vegas-MD now includes an optional assistant layer:
 | `.freechatgroups on/off` | Owner-only switch to allow or block free-chat replies in groups. Group replies are off by default. |
 | `.clearchat` | Clear the current conversation’s in-memory free-chat context. |
 | `.pinterest <query> [count]` / `.pin` | Search Pinterest images and send up to six results with uploader details and source links. |
+| `.pindl <Pinterest URL>` | Download image, video, or other media from a Pinterest pin URL. |
+| `.danimesearch <query> [count]` | Search anime titles and send David Cyril cover images with title and description. (`.animesearch` remains the existing ZST/MAL search command.) |
+| `.dwallpaper <query> [count]` | Search and send David Cyril wallpaper images. (`.wallpaper` remains the existing ZST wallpaper command.) |
+| `.aimusic <prompt>` | Generate an AI song or instrumental using an asynchronous task and send the completed audio. |
+| `.vibe <request>` | Owner-only repository-aware coding review with bounded project context. |
+| `.workrepo status` / `.workrepo files` | Inspect the repository branch, working tree, and accessible files. (`.repo` remains the public repository-link command.) |
+| `.workrepo read <path>` | Read a bounded source-file range without exposing protected paths. |
+| `.workrepo test` | Run `npm test`, discovered tests, or JavaScript syntax checks. |
+| `.workrepo fix <path> <problem>` | Generate a focused unified-diff preview; add `--apply` only when you explicitly want it written. |
+| `.workrepo write --apply <path> <content>` | Intentionally write a file inside the configured repository workspace. |
+| `.secret set NAME VALUE` / `.secret list` / `.secret remove NAME` | Store API secrets encrypted at rest; values are never returned by the bot. |
 
 Free Chat is deliberately **off by default** and is controlled per bot owner/session. The bot ignores its own generated replies, keeps only a short in-memory conversation window, and does not treat unknown prefixed messages as free-chat prompts. The existing `.tts` command remains available as a free Google-backed voice-note option when `OPENAI_API_KEY` is not configured.
 
-For best reliability, configure `OPENAI_API_KEY` for coding help and free chat; these text features fall back to a public text provider when no key is available. The `.speak` command requires `OPENAI_API_KEY`. You can select models with `CODING_AI_MODEL`, `FREE_CHAT_AI_MODEL`, and `AI_MODEL`. The speech command uses `OPENAI_TTS_MODEL` and `OPENAI_TTS_VOICE`; see `.env.example` for the complete optional configuration.
+The repository-aware coding assistant is owner-only. It defaults to the directory containing `main.js`, refuses traversal outside that workspace, blocks `.env`, encrypted secret, authentication, `.git`, `node_modules`, and private-key paths, limits file/context sizes, and applies AI-generated patches only when the explicit `--apply` flag is used. Set `REPO_WORKSPACE` if the bot should manage a different local checkout. Use `.secret set` only from the owner account; the stronger deployment pattern is to place `SECRET_STORE_KEY` in Replit Secrets or the host secret manager, because a secret typed into WhatsApp is still visible in the originating chat history.
+
+The `.imagine` command keeps its existing Pollinations providers and now uses the supplied ZST DeepAI endpoint as a final text-to-image fallback. The implementation prefers the API’s `imageUrls` proxy result, downloads the image server-side, enforces a size limit, and sends the image as a WhatsApp attachment. The Azbry scraper page currently identifies itself as `YT Search & YT mp3`, but its request contract is protected and could not be verified, so it was not guessed or wired into production code.
+
+For best reliability, configure `OPENAI_API_KEY` for coding help and free chat; these text features fall back to a public text provider when no key is available. The `.speak` command requires `OPENAI_API_KEY`. You can select models with `CODING_AI_MODEL`, `FREE_CHAT_AI_MODEL`, and `AI_MODEL`. The speech command uses `OPENAI_TTS_MODEL` and `OPENAI_TTS_VOICE`. The David Cyril integrations use `DAVID_CYRIL_API_BASE` and support polling controls through `AI_MUSIC_POLL_ATTEMPTS` and `AI_MUSIC_POLL_DELAY_MS`; see `.env.example` for the complete optional configuration.
 
 ## License
 

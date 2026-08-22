@@ -7,6 +7,13 @@ const fs   = require('fs');
 const path = require('path');
 const os   = require('os');
 const axios = require('axios');
+const {
+  MAX_AUDIO_BYTES,
+  MAX_VIDEO_BYTES,
+  downloadMedia,
+  fetchMusic,
+  fetchPinterestDownload,
+} = require('../lib/david-cyril-api');
 
 const execAsync = promisify(exec);
 const { execFile } = require('child_process');
@@ -977,8 +984,85 @@ async function sendVideoFromFile(sock, jid, filePath, caption) {
   await sock.sendMessage(jid, { video: buf, caption, mimetype: 'video/mp4' });
 }
 
+function assertPinterestUrl(url) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:' || !/(^|\.)pinterest\.com$|(^|\.)pin\.it$/i.test(parsed.hostname)) {
+      throw new Error('Invalid Pinterest URL');
+    }
+  } catch {
+    throw new Error('Invalid Pinterest URL');
+  }
+}
+
+async function sendProviderMedia(sock, jid, media, caption) {
+  const type = media.type || 'unknown';
+  if (type === 'video') {
+    await sock.sendMessage(jid, { video: media.buffer, caption, mimetype: media.contentType || 'video/mp4' });
+  } else if (type === 'audio') {
+    await sock.sendMessage(jid, { audio: media.buffer, mimetype: media.contentType || 'audio/mpeg', ptt: false });
+    if (caption) await sock.sendMessage(jid, { text: caption });
+  } else if (type === 'image') {
+    await sock.sendMessage(jid, { image: media.buffer, caption });
+  } else {
+    await sock.sendMessage(jid, { document: media.buffer, mimetype: media.contentType || 'application/octet-stream', fileName: 'pinterest-media' });
+    if (caption) await sock.sendMessage(jid, { text: caption });
+  }
+}
+
+async function sendDavidCyrilMusicFallback(query, sock, jid) {
+  const errors = [];
+  for (const endpoint of ['song', 'play']) {
+    try {
+      const music = await fetchMusic(query, endpoint);
+      const details = [
+        `🎵 *${music.title}*`,
+        music.artist ? `👤 ${music.artist}` : '',
+        music.duration ? `⏱️ ${music.duration}` : '',
+        `🔗 ${music.videoUrl || `https://apis.davidcyril.name.ng/${endpoint}?query=${encodeURIComponent(query)}`}`,
+      ].filter(Boolean).join('\n');
+      await sendAudioFromUrl(sock, jid, music.downloadUrl, details);
+      return music;
+    } catch (error) {
+      errors.push(`${endpoint}: ${error.message}`);
+    }
+  }
+  throw new Error(`David Cyril music fallback failed (${errors.join('; ')})`);
+}
+
 // ── Commands ───────────────────────────────────────────────────────────────
 const downloadCommands = {
+
+  // ── Pinterest URL downloader (David Cyril API) ─────────
+  pindl: {
+    category: 'downloader', reaction: '📌', desc: 'Download media from a Pinterest pin URL',
+    usage: '.pindl <Pinterest pin URL>', aliases: ['pinterestdl', 'pindownload'], permissions: 'all',
+    examples: ['.pindl https://www.pinterest.com/pin/123456789/'],
+    exec: async (args, sock, jid) => {
+      const url = String(args[0] || '').trim();
+      if (!url) return sock.sendMessage(jid, { text: '❌ Usage: .pindl <Pinterest pin URL>' });
+      try {
+        assertPinterestUrl(url);
+      } catch (error) {
+        return sock.sendMessage(jid, { text: `❌ ${error.message}. Use a pinterest.com or pin.it URL.` });
+      }
+
+      await sock.sendMessage(jid, { text: '📌 Fetching Pinterest media...' });
+      try {
+        const { result, mediaUrl } = await fetchPinterestDownload(url);
+        const media = await downloadMedia(mediaUrl, {
+          maxBytes: /\.(mp4|webm|mov)(?:\?|$)/i.test(mediaUrl) ? MAX_VIDEO_BYTES : MAX_IMAGE_BYTES,
+          timeout: 90_000,
+        });
+        const title = String(result?.title || result?.caption || 'Pinterest media').trim().slice(0, 160);
+        const caption = `📌 *Pinterest Download*\n${title}\n🔗 ${url}`;
+        await sendProviderMedia(sock, jid, media, caption);
+      } catch (error) {
+        console.error('[pindl] failed:', error.message);
+        await sock.sendMessage(jid, { text: `❌ Pinterest download failed: ${error.message}` });
+      }
+    },
+  },
 
   // ── TikTok ──────────────────────────────────────────────
   tiktok: {
@@ -1168,6 +1252,7 @@ const downloadCommands = {
       const q = args.join(' ').trim();
       if (!q) return sock.sendMessage(jid, { text: `❌ Usage: .song <song name>` });
       await sock.sendMessage(jid, { text: `🎵 Searching: _"${q}"_...` });
+
       try {
         const video = await searchYouTube(q);
         const ytUrl   = `https://youtu.be/${video.videoId}`;
@@ -1186,8 +1271,17 @@ const downloadCommands = {
           const dlUrl = await cobaltFetch(ytUrl, 'audio', 'mp3');
           await sendAudioFromUrl(sock, jid, dlUrl, caption);
         }
-      } catch (err) {
-        await sock.sendMessage(jid, { text: `❌ Song download failed: ${err.message}` });
+        return;
+      } catch (primaryError) {
+        console.warn(`[song] primary provider failed: ${primaryError.message}`);
+      }
+
+      try {
+        await sock.sendMessage(jid, { text: '↪️ The primary music provider failed. Trying the David Cyril music fallback...' });
+        await sendDavidCyrilMusicFallback(q, sock, jid);
+      } catch (fallbackError) {
+        console.error(`[song] fallback failed: ${fallbackError.message}`);
+        await sock.sendMessage(jid, { text: `❌ Song download failed: ${fallbackError.message}` });
       }
     }
   },

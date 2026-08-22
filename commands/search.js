@@ -2,6 +2,12 @@
 // commands/search.js — Search commands via free public APIs
 // All APIs are keyless.  lyrics uses api.lyrics.ovh (verified working).
 const axios = require('axios');
+const {
+  MAX_IMAGE_BYTES,
+  downloadMedia,
+  requestJson,
+  unwrapResult,
+} = require('../lib/david-cyril-api');
 
 async function googleSearch(query) {
   // DuckDuckGo instant answer API — no key required
@@ -106,6 +112,82 @@ function pinterestCaption(item, index, total, query) {
   if (item.caption) lines.push(`📝 ${item.caption}`);
   if (item.source && /^https:\/\/(www\.)?pinterest\.com\//i.test(item.source)) lines.push(`🔗 ${item.source}`);
   return lines.join('\n');
+}
+
+const MAX_VISUAL_RESULTS = 4;
+
+function parseVisualRequest(args) {
+  const parts = [...args];
+  let count = 3;
+  const last = parts[parts.length - 1];
+  if (parts.length > 1 && /^\d+$/.test(last)) {
+    count = Math.min(MAX_VISUAL_RESULTS, Math.max(1, Number(last)));
+    parts.pop();
+  }
+  return {
+    query: parts.join(' ').trim().replace(/^\$+/, '').trim(),
+    count,
+  };
+}
+
+function pickVisualUrl(item) {
+  for (const key of ['image', 'image_url', 'imageUrl', 'thumbnail', 'thumb', 'url', 'link']) {
+    if (typeof item?.[key] === 'string' && /^https:\/\//i.test(item[key])) return item[key].trim();
+  }
+  return null;
+}
+
+function normalizeVisualResults(payload, count = 3) {
+  const result = unwrapResult(payload);
+  const list = Array.isArray(result)
+    ? result
+    : result?.results || result?.items || result?.images || result?.data || [];
+  const seen = new Set();
+  return (Array.isArray(list) ? list : [])
+    .map(item => ({
+      title: String(item?.title || item?.name || 'Untitled result').replace(/\s+/g, ' ').trim().slice(0, 220),
+      description: String(item?.description || item?.caption || '').replace(/\s+/g, ' ').trim().slice(0, 400),
+      type: String(item?.type || item?.status || '').trim(),
+      source: String(item?.source || item?.url || '').trim(),
+      image: pickVisualUrl(item),
+    }))
+    .filter(item => item.image && !seen.has(item.image) && seen.add(item.image))
+    .slice(0, Math.min(MAX_VISUAL_RESULTS, Math.max(1, count)));
+}
+
+async function sendVisualSearchResults({ endpoint, params, query, count, title, sock, jid, kind }) {
+  const payload = await requestJson(endpoint, { params, timeout: 30_000 });
+  const results = normalizeVisualResults(payload, count);
+  if (!results.length) {
+    await sock.sendMessage(jid, { text: `😔 No ${kind} images were found for *${query}*.` });
+    return 0;
+  }
+
+  let sent = 0;
+  for (let index = 0; index < results.length; index++) {
+    const item = results[index];
+    try {
+      const media = await downloadMedia(item.image, { maxBytes: MAX_IMAGE_BYTES, timeout: 30_000 });
+      const captionLines = [
+        `${title} ${index + 1}/${results.length}`,
+        `🔍 _${query}_`,
+        `📝 ${item.title}`,
+      ];
+      if (item.type && item.type.toLowerCase() !== 'unknown type') captionLines.push(`🏷️ ${item.type}`);
+      if (item.description) captionLines.push(item.description);
+      if (/^https:\/\//i.test(item.source) && !/^unknown source$/i.test(item.source)) captionLines.push(`🔗 ${item.source}`);
+      await sock.sendMessage(jid, { image: media.buffer, caption: captionLines.join('\n') });
+      sent++;
+    } catch (error) {
+      console.warn(`[${kind}] result ${index + 1} failed: ${error.message}`);
+    }
+  }
+  if (!sent) {
+    await sock.sendMessage(jid, { text: `❌ ${kind} results were returned, but none could be downloaded.` });
+  } else if (sent < results.length) {
+    await sock.sendMessage(jid, { text: `✅ Sent ${sent}/${results.length} ${kind} image(s).` });
+  }
+  return sent;
 }
 
 const searchCommands = {
@@ -437,6 +519,60 @@ const searchCommands = {
     }
   },
 
+  // ── Anime catalog search (David Cyril API) ───────────────
+  danimesearch: {
+    category: 'search', desc: 'Search anime titles and send David Cyril cover images',
+    usage: '.danimesearch <query> [count]', aliases: ['animefind', 'animecovers'], permissions: 'all',
+    examples: ['.animesearch naruto', '.animesearch one piece 2'],
+    exec: async (args, sock, jid) => {
+      const { query, count } = parseVisualRequest(args);
+      if (!query) return sock.sendMessage(jid, { text: '❌ Usage: .danimesearch <query> [1-4]' });
+      await sock.sendMessage(jid, { text: `🎌 Searching anime for _"${query}"_...` });
+      try {
+        await sendVisualSearchResults({
+          endpoint: '/animeindo/search',
+          params: { q: query },
+          query,
+          count,
+          title: '🎌 *Anime*',
+          sock,
+          jid,
+          kind: 'anime',
+        });
+      } catch (error) {
+        console.error('[danimesearch] failed:', error.message);
+        await sock.sendMessage(jid, { text: `❌ Anime search is temporarily unavailable: ${error.message}` });
+      }
+    },
+  },
+
+  // ── Wallpaper image search (David Cyril API) ─────────────
+  dwallpaper: {
+    category: 'search', desc: 'Search and send David Cyril wallpaper images',
+    usage: '.dwallpaper <query> [count]', aliases: ['wallsearch', 'wpsearch'], permissions: 'all',
+    examples: ['.wallpaper naruto', '.wallpaper dark phone wallpaper 4'],
+    exec: async (args, sock, jid) => {
+      const { query, count } = parseVisualRequest(args);
+      if (!query) return sock.sendMessage(jid, { text: '❌ Usage: .dwallpaper <query> [1-4]' });
+      await sock.sendMessage(jid, { text: `🖼️ Searching wallpapers for _"${query}"_...` });
+      try {
+        await sendVisualSearchResults({
+          endpoint: '/search/wallpaper',
+          params: { text: query },
+          query,
+          count,
+          title: '🖼️ *Wallpaper*',
+          sock,
+          jid,
+          kind: 'wallpaper',
+        });
+      } catch (error) {
+        console.error('[dwallpaper] failed:', error.message);
+        await sock.sendMessage(jid, { text: `❌ Wallpaper search is temporarily unavailable: ${error.message}` });
+      }
+    },
+  },
+
   // ── Pinterest image search (David Cyril API) ─────────────
   pinterest: {
     category: 'search', desc: 'Search Pinterest and send image results',
@@ -494,11 +630,13 @@ const searchCommands = {
 };
 
 module.exports = searchCommands;
-if (process.env.PINTEREST_TEST_INTERNALS) {
+if (process.env.PINTEREST_TEST_INTERNALS || process.env.VISUAL_SEARCH_TEST_INTERNALS) {
   module.exports._internals = {
     parsePinterestRequest,
     isAllowedPinterestImageUrl,
     normalizePinterestResults,
     pinterestCaption,
+    parseVisualRequest,
+    normalizeVisualResults,
   };
 }
