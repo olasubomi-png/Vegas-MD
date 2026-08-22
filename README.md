@@ -185,6 +185,7 @@ Vegas-MD now includes an optional assistant layer:
 | `.freechat off` | Disable ordinary-message replies; command handling remains unchanged. |
 | `.freechatgroups on/off` | Owner-only switch to allow or block free-chat replies in groups. Group replies are off by default. |
 | `.clearchat` | Clear the current conversation’s in-memory free-chat context. |
+| `.pinterest <query> [count]` / `.pin` | Search Pinterest images and send up to six results with uploader details and source links. |
 
 Free Chat is deliberately **off by default** and is controlled per bot owner/session. The bot ignores its own generated replies, keeps only a short in-memory conversation window, and does not treat unknown prefixed messages as free-chat prompts. The existing `.tts` command remains available as a free Google-backed voice-note option when `OPENAI_API_KEY` is not configured.
 

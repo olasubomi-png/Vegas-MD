@@ -15,6 +15,99 @@ async function googleSearch(query) {
   return `🔍 No instant result for "*${query}*".\n\nSearch online: https://google.com/search?q=${encodeURIComponent(query)}`;
 }
 
+const PINTEREST_API_URL = process.env.PINTEREST_API_URL || 'https://apis.davidcyril.name.ng/search/pinterest';
+const MAX_PINTEREST_RESULTS = 6;
+const MAX_PINTEREST_IMAGE_BYTES = 8 * 1024 * 1024;
+
+function parsePinterestRequest(args) {
+  const parts = [...args];
+  let count = 3;
+  const last = parts[parts.length - 1];
+  if (parts.length > 1 && /^\d+$/.test(last)) {
+    count = Math.min(MAX_PINTEREST_RESULTS, Math.max(1, Number(last)));
+    parts.pop();
+  }
+  const query = parts.join(' ').trim().replace(/^\$+/, '').trim();
+  return { query, count };
+}
+
+function isAllowedPinterestImageUrl(value) {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'https:' && /(^|\.)pinimg\.com$/i.test(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function cleanPinterestText(value, fallback = '') {
+  return String(value || fallback).replace(/\s+/g, ' ').trim().slice(0, 240);
+}
+
+function normalizePinterestResults(data, count = 3) {
+  if (!data || data.success !== true || !Array.isArray(data.result)) return [];
+  const seen = new Set();
+  return data.result
+    .map(item => ({
+      uploader: cleanPinterestText(item?.uploader, 'Unknown uploader'),
+      fullName: cleanPinterestText(item?.fullName),
+      followers: Number.isFinite(Number(item?.followers)) ? Number(item.followers) : null,
+      caption: cleanPinterestText(item?.caption),
+      image: String(item?.image || '').trim(),
+      source: String(item?.source || '').trim(),
+    }))
+    .filter(item => {
+      if (!isAllowedPinterestImageUrl(item.image) || seen.has(item.image)) return false;
+      seen.add(item.image);
+      return true;
+    })
+    .slice(0, Math.min(MAX_PINTEREST_RESULTS, Math.max(1, count)));
+}
+
+async function fetchPinterestResults(query, count) {
+  const { data } = await axios.get(PINTEREST_API_URL, {
+    params: { text: query },
+    timeout: 20_000,
+    headers: {
+      'User-Agent': 'Vegas-MD/3.0',
+      Accept: 'application/json'
+    }
+  });
+  return normalizePinterestResults(data, count);
+}
+
+async function downloadPinterestImage(url) {
+  const { data, headers } = await axios.get(url, {
+    responseType: 'arraybuffer',
+    timeout: 30_000,
+    maxContentLength: MAX_PINTEREST_IMAGE_BYTES,
+    maxBodyLength: MAX_PINTEREST_IMAGE_BYTES,
+    maxRedirects: 5,
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (compatible; Vegas-MD/3.0)',
+      Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8'
+    }
+  });
+  const contentType = String(headers['content-type'] || '').toLowerCase();
+  const buffer = Buffer.from(data);
+  if (contentType && !contentType.startsWith('image/')) {
+    throw new Error(`Pinterest returned ${contentType} instead of an image`);
+  }
+  if (!buffer.length || buffer.length > MAX_PINTEREST_IMAGE_BYTES) {
+    throw new Error('Pinterest image is empty or too large');
+  }
+  return buffer;
+}
+
+function pinterestCaption(item, index, total, query) {
+  const lines = [`📌 *Pinterest ${index}/${total}*`, `🔍 _${query}_`, `👤 ${item.uploader}`];
+  if (item.fullName && item.fullName.toLowerCase() !== item.uploader.toLowerCase()) lines.push(`🪪 ${item.fullName}`);
+  if (item.followers !== null) lines.push(`👥 ${item.followers.toLocaleString()} followers`);
+  if (item.caption) lines.push(`📝 ${item.caption}`);
+  if (item.source && /^https:\/\/(www\.)?pinterest\.com\//i.test(item.source)) lines.push(`🔗 ${item.source}`);
+  return lines.join('\n');
+}
+
 const searchCommands = {
 
   // ── Google / DuckDuckGo instant answers ─────────────
@@ -344,23 +437,68 @@ const searchCommands = {
     }
   },
 
-  // ── Pinterest (redirect — no usable API without auth) ─
+  // ── Pinterest image search (David Cyril API) ─────────────
   pinterest: {
-    category: 'search', desc: 'Search Pinterest for images',
-    usage: '.pinterest <query>', aliases: ['pin'], permissions: 'all',
-    examples: ['.pinterest aesthetic wallpapers', '.pinterest anime art'],
+    category: 'search', desc: 'Search Pinterest and send image results',
+    usage: '.pinterest <query> [count]', aliases: ['pin'], permissions: 'all',
+    examples: ['.pinterest aesthetic wallpapers', '.pinterest naruto 3'],
     exec: async (args, sock, jid) => {
-      const q = args.join(' ').trim();
-      if (!q) return sock.sendMessage(jid, { text: '❌ Usage: .pinterest <query>' });
+      const { query, count } = parsePinterestRequest(args);
+      if (!query) return sock.sendMessage(jid, { text: '❌ Usage: .pinterest <query> [1-6]' });
+
       await sock.sendMessage(jid, {
-        text:
-          `📌 *Pinterest Search*\n\n` +
-          `🔍 Query: _"${q}"_\n\n` +
-          `🔗 View results:\nhttps://pinterest.com/search/pins/?q=${encodeURIComponent(q)}\n\n` +
-          `_Pinterest's image API requires authentication. Click the link above to browse._`
+        text: `📌 *Pinterest Search*\n\n🔍 Query: _"${query}"_\n📦 Results: ${count}\n\n⏳ Fetching images...`
       });
+
+      try {
+        const results = await fetchPinterestResults(query, count);
+        if (!results.length) {
+          return sock.sendMessage(jid, {
+            text: `😔 No safe image results were returned for *${query}*.\n\nTry a shorter or different query.`
+          });
+        }
+
+        let sent = 0;
+        const failures = [];
+        for (let i = 0; i < results.length; i++) {
+          const item = results[i];
+          try {
+            const image = await downloadPinterestImage(item.image);
+            await sock.sendMessage(jid, {
+              image,
+              caption: pinterestCaption(item, i + 1, results.length, query)
+            });
+            sent++;
+          } catch (error) {
+            failures.push(`${i + 1}: ${error.message}`);
+            console.warn(`[pinterest] result ${i + 1} failed: ${error.message}`);
+          }
+        }
+
+        if (!sent) {
+          return sock.sendMessage(jid, {
+            text: '❌ Pinterest returned results, but none could be downloaded. Please try again later.'
+          });
+        }
+        if (failures.length) {
+          await sock.sendMessage(jid, { text: `✅ Sent ${sent}/${results.length} Pinterest image(s). Some results were unavailable.` });
+        }
+      } catch (error) {
+        console.error('[pinterest] search failed:', error.message);
+        await sock.sendMessage(jid, {
+          text: `❌ Pinterest search is temporarily unavailable.\n\nTry again later or browse: https://pinterest.com/search/pins/?q=${encodeURIComponent(query)}`
+        });
+      }
     }
   }
 };
 
 module.exports = searchCommands;
+if (process.env.PINTEREST_TEST_INTERNALS) {
+  module.exports._internals = {
+    parsePinterestRequest,
+    isAllowedPinterestImageUrl,
+    normalizePinterestResults,
+    pinterestCaption,
+  };
+}
