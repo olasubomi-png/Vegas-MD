@@ -5,6 +5,7 @@ const { resolveIsOwner } = require('../lib/helpers');
 const { isBotGenerated } = require('../lib/bot-messages');
 const {
   askText,
+  askChat,
   generateSpeech,
   getOpenAIKey,
   getFreeChatSystemPrompt,
@@ -154,10 +155,10 @@ async function handleFreeChat({ text, sock, jid, sender, botConfig, isGroup, mes
 
   try {
     await sock.sendPresenceUpdate('composing', jid).catch(() => {});
-    const answer = await askText([
+    const answer = await askChat([
       { role: 'system', content: getFreeChatSystemPrompt(botConfig?.name || 'Vegas-MD') },
       ...nextHistory,
-    ], { model: process.env.FREE_CHAT_AI_MODEL || process.env.AI_MODEL || 'gpt-4o-mini', maxTokens: 900 });
+    ], { model: process.env.ZST_CHAT_MODEL || process.env.FREE_CHAT_AI_MODEL || process.env.AI_MODEL || 'gpt-4o-mini', maxTokens: 900 });
 
     setHistory(key, [...nextHistory, { role: 'assistant', content: answer }]);
     await sock.sendMessage(jid, { text: answer });
@@ -187,10 +188,10 @@ async function handleChat(args, sock, jid, _isGroup, _sender, message, botConfig
   const nextHistory = [...history, { role: 'user', content: query }];
   await sock.sendPresenceUpdate('composing', jid).catch(() => {});
   try {
-    const answer = await askText([
+    const answer = await askChat([
       { role: 'system', content: getFreeChatSystemPrompt(botConfig?.name || 'Vegas-MD') },
       ...nextHistory,
-    ], { model: process.env.FREE_CHAT_AI_MODEL || process.env.AI_MODEL || 'gpt-4o-mini', maxTokens: 900 });
+    ], { model: process.env.ZST_CHAT_MODEL || process.env.FREE_CHAT_AI_MODEL || process.env.AI_MODEL || 'gpt-4o-mini', maxTokens: 900 });
     setHistory(key, [...nextHistory, { role: 'assistant', content: answer }]);
     await sock.sendMessage(jid, { text: answer });
   } catch (error) {
