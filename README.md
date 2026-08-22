@@ -172,6 +172,24 @@ const newCommands = {
 };
 ```
 
+## New Assistant Features
+
+Vegas-MD now includes an optional assistant layer:
+
+| Command | Purpose |
+|---|---|
+| `.code <question or code>` | Explain programming concepts, review code, diagnose errors, and propose fixes or tests. |
+| `.speak <text>` | Generate spoken audio with an OpenAI voice. Use `.speak --voice nova <text>` to select a supported voice. |
+| `.play <song name>` / `.song <song name>` | Search YouTube and send the track as audio, using `yt-dlp` first and public search fallbacks when needed. |
+| `.freechat on` | Owner-only switch that enables natural replies to ordinary private-chat messages. |
+| `.freechat off` | Disable ordinary-message replies; command handling remains unchanged. |
+| `.freechatgroups on/off` | Owner-only switch to allow or block free-chat replies in groups. Group replies are off by default. |
+| `.clearchat` | Clear the current conversation’s in-memory free-chat context. |
+
+Free Chat is deliberately **off by default** and is controlled per bot owner/session. The bot ignores its own generated replies, keeps only a short in-memory conversation window, and does not treat unknown prefixed messages as free-chat prompts. The existing `.tts` command remains available as a free Google-backed voice-note option when `OPENAI_API_KEY` is not configured.
+
+For best reliability, configure `OPENAI_API_KEY` for coding help and free chat; these text features fall back to a public text provider when no key is available. The `.speak` command requires `OPENAI_API_KEY`. You can select models with `CODING_AI_MODEL`, `FREE_CHAT_AI_MODEL`, and `AI_MODEL`. The speech command uses `OPENAI_TTS_MODEL` and `OPENAI_TTS_VOICE`; see `.env.example` for the complete optional configuration.
+
 ## License
 
 Created by Olasubomi  

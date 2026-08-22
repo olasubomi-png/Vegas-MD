@@ -70,6 +70,8 @@ const ownerCommands = {
           `├ AutoReact   : ${db.getOwnerSetting(ownerJid, 'autoStatusReact', false) ? '✅' : '❌'}\n` +
           `├ AutoRead    : ${db.getOwnerSetting(ownerJid, 'autoRead', false) ? '✅' : '❌'}\n` +
           `├ AutoTyping  : ${db.getOwnerSetting(ownerJid, 'autoTyping', false) ? '✅' : '❌'}\n` +
+          `├ FreeChat    : ${db.getOwnerSetting(ownerJid, 'freeChat', false) ? '✅' : '❌'}\n` +
+          `├ ChatGroups  : ${db.getOwnerSetting(ownerJid, 'freeChatGroups', false) ? '✅' : '❌'}\n` +
           `└ AntiCall    : ${db.getOwnerSetting(ownerJid, 'antiCall', false) ? '✅' : '❌'}`
       });
     })
@@ -285,6 +287,61 @@ const ownerCommands = {
       const v = sub === 'on';
       db.setOwnerSetting(ownerJid, 'autoTyping', v);
       await sock.sendMessage(jid, { text: `⌨️ Auto-Typing: ${v ? '✅ Enabled' : '❌ Disabled'}` });
+    })
+  },
+
+  freechat: {
+    category: 'owner',
+    desc: 'Enable or disable natural AI replies to non-command messages',
+    usage: '.freechat <on|off|status>', aliases: [], permissions: 'owner',
+    examples: ['.freechat on', '.freechat off', '.freechat status'],
+    exec: ownerOnly(async (args, sock, jid, isGroup, sender, message, botConfig) => {
+      const ownerJid = botConfig?.ownerJid;
+      const sub = (args[0] || 'status').toLowerCase();
+      if (!['on', 'off', 'status'].includes(sub)) {
+        return sock.sendMessage(jid, { text: '❌ Usage: .freechat on OR .freechat off OR .freechat status' });
+      }
+      if (sub === 'status') {
+        const enabled = db.getOwnerSetting(ownerJid, 'freeChat', false);
+        const groups = db.getOwnerSetting(ownerJid, 'freeChatGroups', false);
+        return sock.sendMessage(jid, {
+          text:
+            `💬 *Free Chat*: ${enabled ? '✅ ON' : '❌ OFF'}\n` +
+            `👥 *Group Replies*: ${groups ? '✅ ON' : '❌ OFF'}\n\n` +
+            `Use *.freechat on/off* to control natural replies.\n` +
+            `Use *.freechatgroups on/off* to allow replies in groups.`
+        });
+      }
+      const enabled = sub === 'on';
+      db.setOwnerSetting(ownerJid, 'freeChat', enabled);
+      return sock.sendMessage(jid, {
+        text: enabled
+          ? '💬 *Free Chat enabled.* I will answer ordinary messages naturally in private chats.\n\nUse *.freechatgroups on* if you also want replies in groups.'
+          : '💬 *Free Chat disabled.* I will respond only to commands again.'
+      });
+    })
+  },
+
+  freechatgroups: {
+    category: 'owner',
+    desc: 'Allow or block free-chat replies in groups',
+    usage: '.freechatgroups <on|off|status>', aliases: ['chatgroups'], permissions: 'owner',
+    examples: ['.freechatgroups on', '.freechatgroups off'],
+    exec: ownerOnly(async (args, sock, jid, isGroup, sender, message, botConfig) => {
+      const ownerJid = botConfig?.ownerJid;
+      const sub = (args[0] || 'status').toLowerCase();
+      if (!['on', 'off', 'status'].includes(sub)) {
+        return sock.sendMessage(jid, { text: '❌ Usage: .freechatgroups on OR .freechatgroups off OR .freechatgroups status' });
+      }
+      if (sub === 'status') {
+        const enabled = db.getOwnerSetting(ownerJid, 'freeChatGroups', false);
+        return sock.sendMessage(jid, { text: `👥 Free-chat group replies are currently *${enabled ? 'ON ✅' : 'OFF ❌'}*.` });
+      }
+      const enabled = sub === 'on';
+      db.setOwnerSetting(ownerJid, 'freeChatGroups', enabled);
+      return sock.sendMessage(jid, {
+        text: `👥 Free-chat group replies: *${enabled ? 'ON ✅' : 'OFF ❌'}*\n\nFree Chat itself must also be enabled with *.freechat on*.`
+      });
     })
   },
 

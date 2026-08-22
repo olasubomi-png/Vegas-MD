@@ -46,7 +46,7 @@ function register(mod, sourceLabel) {
 
 // ─── Core command files ────────────────────────────────────
 const coreFiles = [
-  './main', './general', './ai', './download', './search',
+  './main', './general', './ai', './assistant', './download', './search',
   './converter', './tools', './group', './moderation',
   './fun', './games', './audio', './economy', './settings', './owner'
 ];

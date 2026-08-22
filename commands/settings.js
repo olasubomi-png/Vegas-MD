@@ -1,5 +1,6 @@
 'use strict';
 // commands/settings.js — Bot settings display
+const db = require('../lib/database');
 const settingsCommands = {
   settings: {
     category: 'utility', desc: 'Show current bot settings',
@@ -14,6 +15,7 @@ const settingsCommands = {
           `🔖 Prefix  : ${cfg.prefix || '.'}\n` +
           `🔒 Mode    : ${cfg.mode || 'private'}\n` +
           `🏷️  Version : v${cfg.version || '3.0.0'}\n` +
+          `💬 FreeChat: ${db.getOwnerSetting(cfg.ownerJid, 'freeChat', false) ? 'ON' : 'OFF'}\n` +
           `✅ Status  : Active`
       });
     }

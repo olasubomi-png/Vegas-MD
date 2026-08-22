@@ -220,6 +220,8 @@ const {
 } = require('./events/protection');
 const { handleStatusUpdate } = require('./events/autoStatus');
 const allCommands    = require('./commands/index');
+const { handleFreeChat } = require('./commands/assistant');
+const { remember: rememberBotMessage } = require('./lib/bot-messages');
 const sessionManager = require('./lib/sessionManager');
 
 // ─── Bot configuration ────────────────────────────────────
@@ -494,6 +496,7 @@ function attachHandlers(sock, saveCreds) {
     console.log(`[send] sock#${sockId} → ${jid} | ${preview}`);
     try {
       const res = await _origSend(jid, content, options);
+      rememberBotMessage(res?.key?.id);
       console.log(`[send] ✅ sock#${sockId} → ${jid} OK (msgId: ${res?.key?.id})`);
       return res;
     } catch (err) {
@@ -974,6 +977,14 @@ function attachHandlers(sock, saveCreds) {
                 console.error('[FONT] auto-apply error:', fontErr.message);
               }
             }
+            const handledByFreeChat = await handleFreeChat({
+              text, sock, jid, sender, botConfig, isGroup: isJidGroup(jid), message
+            }).catch(err => {
+              console.error('[free-chat] primary routing error:', err.message);
+              return false;
+            });
+            if (handledByFreeChat) continue;
+
             console.log(`[WA] not a command — text does not start with prefix "${prefix}"`);
             continue;
           }

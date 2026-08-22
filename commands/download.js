@@ -86,6 +86,66 @@ async function ytDlpDownload(url, format = 'audio', quality = '720') {
   return path.join(dir, found);
 }
 
+// Search YouTube without a shell. yt-dlp is already declared as a Replit
+// system dependency, and using it for search is more reliable than depending
+// on one public Invidious instance staying online.
+async function ytDlpSearch(query) {
+  const { stdout } = await execFileAsync('yt-dlp', [
+    '--flat-playlist',
+    '--playlist-end', '1',
+    '--print', '%(id)s\t%(title)s\t%(uploader)s\t%(duration)s',
+    '--extractor-args', 'youtube:player_client=android,web',
+    `ytsearch1:${query}`
+  ], { timeout: 60_000, maxBuffer: 2 * 1024 * 1024 });
+
+  const line = String(stdout || '').split(/\r?\n/).map(s => s.trim()).find(Boolean);
+  if (!line) throw new Error('yt-dlp returned no search result');
+  const [videoId, title, author, durationRaw] = line.split('\t');
+  if (!videoId || !title) throw new Error('yt-dlp returned an invalid search result');
+  return {
+    videoId,
+    title,
+    author: author || 'Unknown artist',
+    lengthSeconds: Number(durationRaw) || 0
+  };
+}
+
+async function searchYouTube(query) {
+  const errors = [];
+  if (await ytDlpAvailable()) {
+    try { return await ytDlpSearch(query); } catch (err) { errors.push(`yt-dlp: ${err.message}`); }
+  }
+
+  const bases = [
+    process.env.INVIDIOUS_SEARCH_URL,
+    'https://invidious.nerdvpn.de',
+    'https://invidious.f5.si',
+    'https://inv.nadeko.net'
+  ].filter(Boolean);
+  for (const base of [...new Set(bases)]) {
+    try {
+      const { data } = await axios.get(`${base}/api/v1/search`, {
+        params: { q: query, type: 'video', fields: 'videoId,title,author,lengthSeconds' },
+        timeout: 15_000,
+        headers: { 'User-Agent': 'Vegas-MD/3.0', Accept: 'application/json' }
+      });
+      if (Array.isArray(data) && data.length) {
+        const item = data.find(v => v.videoId && v.title) || data[0];
+        return {
+          videoId: item.videoId,
+          title: item.title || query,
+          author: item.author || item.uploader || 'Unknown artist',
+          lengthSeconds: Number(item.lengthSeconds) || 0
+        };
+      }
+    } catch (err) {
+      errors.push(`${base}: ${err.response?.status || err.message}`);
+    }
+  }
+
+  throw new Error(`No music search provider is available${errors.length ? ` (${errors.slice(0, 2).join('; ')})` : ''}`);
+}
+
 // ── TikTok via tikwm.com ───────────────────────────────────────────────────
 async function tikwmFetch(url) {
   const { data } = await axios.post(
@@ -1109,13 +1169,7 @@ const downloadCommands = {
       if (!q) return sock.sendMessage(jid, { text: `❌ Usage: .song <song name>` });
       await sock.sendMessage(jid, { text: `🎵 Searching: _"${q}"_...` });
       try {
-        // Get first YouTube result via Invidious (open-source YouTube frontend)
-        const { data } = await axios.get(
-          `https://invidious.nerdvpn.de/api/v1/search?q=${encodeURIComponent(q)}&type=video&fields=videoId,title,author,lengthSeconds`,
-          { timeout: 15000 }
-        );
-        if (!data?.length) throw new Error('No results found');
-        const video   = data[0];
+        const video = await searchYouTube(q);
         const ytUrl   = `https://youtu.be/${video.videoId}`;
         const caption = `🎵 *${video.title}*\n👤 ${video.author}\n⏱️ ${Math.floor(video.lengthSeconds / 60)}:${String(video.lengthSeconds % 60).padStart(2, '0')}`;
         await sock.sendMessage(jid, { text: `${caption}\n\n⏳ Downloading...` });
@@ -1155,12 +1209,7 @@ const downloadCommands = {
       if (!q) return sock.sendMessage(jid, { text: `❌ Usage: .video <title>` });
       await sock.sendMessage(jid, { text: `🎬 Searching: _"${q}"_...` });
       try {
-        const { data } = await axios.get(
-          `https://invidious.nerdvpn.de/api/v1/search?q=${encodeURIComponent(q)}&type=video&fields=videoId,title,author,lengthSeconds`,
-          { timeout: 15000 }
-        );
-        if (!data?.length) throw new Error('No results found');
-        const video   = data[0];
+        const video = await searchYouTube(q);
         const ytUrl   = `https://youtu.be/${video.videoId}`;
         const caption = `🎬 *${video.title}*\n👤 ${video.author}`;
         await sock.sendMessage(jid, { text: `${caption}\n\n⏳ Downloading...` });
@@ -1203,12 +1252,8 @@ const downloadCommands = {
         }
         await sock.sendMessage(jid, { text: `🎧 Found: *${title}*\n\n⏳ Downloading via YouTube...` });
         // Search YouTube for the track and download
-        const { data } = await axios.get(
-          `https://invidious.nerdvpn.de/api/v1/search?q=${encodeURIComponent(title)}&type=video&fields=videoId,title,author`,
-          { timeout: 15000 }
-        );
-        if (!data?.length) throw new Error('Track not found on YouTube');
-        const ytUrl = `https://youtu.be/${data[0].videoId}`;
+        const video = await searchYouTube(title);
+        const ytUrl = `https://youtu.be/${video.videoId}`;
         if (await ytDlpAvailable()) {
           let filePath;
           try {
