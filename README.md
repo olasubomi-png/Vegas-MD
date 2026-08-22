@@ -203,6 +203,8 @@ Vegas-MD now includes an optional assistant layer:
 | `.workrepo write --apply <path> <content>` | Intentionally write a file inside the configured repository workspace. |
 | `.secret set NAME VALUE` / `.secret list` / `.secret remove NAME` | Store API secrets encrypted at rest; values are never returned by the bot. |
 
+The `.setwelcome` and `.setgoodbye` settings are applied to WhatsApp participant-update events. The handler accepts both single and batch updates, recognizes new-member, voluntary-leave, and kick/removal action variants, and falls back to text when a member profile picture cannot be fetched.
+
 Free Chat is deliberately **off by default** and is controlled per bot owner/session. The bot ignores its own generated replies, keeps only a short in-memory conversation window, and does not treat unknown prefixed messages as free-chat prompts. The existing `.tts` command remains available as a free Google-backed voice-note option when `OPENAI_API_KEY` is not configured.
 
 The repository-aware coding assistant is owner-only. It defaults to the directory containing `main.js`, refuses traversal outside that workspace, blocks `.env`, encrypted secret, authentication, `.git`, `node_modules`, and private-key paths, limits file/context sizes, and applies AI-generated patches only when the explicit `--apply` flag is used. Set `REPO_WORKSPACE` if the bot should manage a different local checkout. Use `.secret set` only from the owner account; the stronger deployment pattern is to place `SECRET_STORE_KEY` in Replit Secrets or the host secret manager, because a secret typed into WhatsApp is still visible in the originating chat history.

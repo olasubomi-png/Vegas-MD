@@ -1,48 +1,81 @@
 'use strict';
 // events/welcome.js — Welcome & goodbye message handler
 //
-// Flow when a member joins (action === 'add'):
-//   1. Check settings.welcome is enabled.
-//   2. Fetch group metadata for name + member count.
-//   3. Resolve the image to send (priority order):
-//        a) Custom group welcome image (saved via .setwelcomeimage)
-//        b) Joining member's WhatsApp profile picture
-//        c) No image → text-only message
-//   4. Replace @user / @group / @count variables in the template.
-//   5. Send as imageMessage+caption (with mention) or text+mention.
-//
-// Flow when a member leaves (action === 'remove'): same, using goodbye settings.
-//
-// NOTE: WhatsApp's Baileys library does not provide a pre-send hook for
-// messages the user types on their phone.  The group-participants.update event
-// fires AFTER the participant change is confirmed by WhatsApp servers, so
-// by definition the welcome is always sent AFTER the member appears in the group.
-// Profile-picture fetching may fail for users with privacy settings — the code
-// catches those errors and falls back gracefully.
+// Baileys versions and secondary-session wrappers may deliver
+// group-participants.update as either one object or an array. This module
+// normalises both forms before processing so joins, voluntary leaves, and
+// removals/kicks all use the same reliable path.
 
-const fs   = require('fs');
-const path = require('path');
+const fs    = require('fs');
+const path  = require('path');
 const http  = require('http');
 const https = require('https');
-const db   = require('../lib/database');
+const db    = require('../lib/database');
 
 const IMAGES_DIR = path.join(__dirname, '../data/group_images');
 fs.mkdirSync(IMAGES_DIR, { recursive: true });
 
+function normalizeAction(action) {
+  const value = String(action || '').trim().toLowerCase();
+  if (['add', 'added', 'join', 'joined', 'invite'].includes(value)) return 'add';
+  if (['remove', 'removed', 'leave', 'left', 'leftgroup', 'kick', 'kicked'].includes(value)) return 'remove';
+  return value;
+}
+
+function normalizeParticipant(participant) {
+  if (typeof participant === 'string') return participant.trim();
+  if (!participant || typeof participant !== 'object') return '';
+  return String(participant.id || participant.jid || participant.user || '').trim();
+}
+
+function normalizeParticipantUpdates(input) {
+  const rawUpdates = Array.isArray(input) ? input : [input];
+  return rawUpdates.map(update => {
+    if (!update || typeof update !== 'object') return null;
+    const groupJid = String(update.id || update.jid || update.groupJid || '').trim();
+    const participants = (Array.isArray(update.participants) ? update.participants : [update.participants])
+      .map(normalizeParticipant)
+      .filter(Boolean);
+    return {
+      id: groupJid,
+      participants,
+      action: normalizeAction(update.action || update.type || update.event),
+    };
+  }).filter(update =>
+    update && /^\d+@(?:g\.us|group)$/i.test(update.id) &&
+    update.participants.length > 0 &&
+    (update.action === 'add' || update.action === 'remove')
+  );
+}
+
 // ── Download a URL to a Buffer ─────────────────────────────────────────────
-function fetchBuffer(url) {
+function fetchBuffer(url, redirects = 0) {
   return new Promise((resolve, reject) => {
-    const mod = url.startsWith('https') ? https : http;
-    const req = mod.get(url, { timeout: 8000 }, res => {
+    if (!/^https?:\/\//i.test(String(url || ''))) return reject(new Error('invalid image URL'));
+    if (redirects > 3) return reject(new Error('too many image redirects'));
+    const target = new URL(url);
+    const mod = target.protocol === 'https:' ? https : http;
+    const req = mod.get(target, { timeout: 8_000, headers: { 'User-Agent': 'Vegas-MD/3.0' } }, res => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        return fetchBuffer(res.headers.location).then(resolve).catch(reject);
+        res.resume();
+        const next = new URL(res.headers.location, target).toString();
+        return fetchBuffer(next, redirects + 1).then(resolve).catch(reject);
       }
       if (res.statusCode !== 200) {
+        res.resume();
         return reject(new Error(`HTTP ${res.statusCode}`));
       }
       const chunks = [];
-      res.on('data', c => chunks.push(c));
-      res.on('end',  () => resolve(Buffer.concat(chunks)));
+      let total = 0;
+      res.on('data', chunk => {
+        total += chunk.length;
+        if (total <= 10 * 1024 * 1024) chunks.push(chunk);
+        else res.destroy(new Error('image exceeds 10 MB'));
+      });
+      res.on('end', () => {
+        if (total > 10 * 1024 * 1024) return reject(new Error('image exceeds 10 MB'));
+        resolve(Buffer.concat(chunks));
+      });
       res.on('error', reject);
     });
     req.on('error', reject);
@@ -61,23 +94,19 @@ function readGroupImage(type, groupId) {
 
 // ── Substitute @user / @group / @count in a message template ─────────────
 function resolveVars(template, { userNum, groupName, count }) {
-  return template
-    .replace(/@user/g,  `@${userNum}`)
+  return String(template || '')
+    .replace(/@user/g, `@${userNum}`)
     .replace(/@group/g, groupName)
-    .replace(/@count/g, count);
+    .replace(/@count/g, String(count));
 }
 
-// ── Core handler — called from the group-participants.update listener ─────
-async function handleParticipantUpdate(sock, { id: groupJid, participants, action }) {
-  if (action !== 'add' && action !== 'remove') return;
-
+async function handleSingleParticipantUpdate(sock, { id: groupJid, participants, action }) {
   const settings = db.getGroup(groupJid);
   const groupId  = groupJid.replace(/@.*/g, '');
 
-  if (action === 'add'    && !settings.welcome) return;
+  if (action === 'add' && !settings.welcome) return;
   if (action === 'remove' && !settings.goodbye) return;
 
-  // Fetch group metadata once — needed for group name + member count
   let meta;
   try {
     meta = await sock.groupMetadata(groupJid);
@@ -86,53 +115,61 @@ async function handleParticipantUpdate(sock, { id: groupJid, participants, actio
     return;
   }
 
+  const groupParticipants = Array.isArray(meta?.participants) ? meta.participants : [];
+  const count = groupParticipants.length;
+  const groupName = meta?.subject || groupJid;
+  const isAdd = action === 'add';
+
   for (const participantJid of participants) {
     try {
-      const userNum   = participantJid.replace(/@.*/g, '');
-      const count     = meta.participants.length;
-      const groupName = meta.subject || groupJid;
-      const isAdd     = action === 'add';
-
+      const userNum = participantJid.replace(/@.*/g, '');
       const template = isAdd
         ? (settings.welcomeMsg || '👋 Welcome @user to *@group*! You are member #@count.')
         : (settings.goodbyeMsg || '👋 *@user* has left *@group*.');
-
       const caption = resolveVars(template, { userNum, groupName, count });
 
-      // ── Resolve image (custom → profile pic → none) ─────────────────
-      let imageBuffer = null;
-
-      // 1. Custom saved image for this group
-      imageBuffer = readGroupImage(isAdd ? 'welcome' : 'goodbye', groupId);
-
-      // 2. Member's profile picture
+      // Custom group image takes priority; profile-picture fallback is best effort.
+      let imageBuffer = readGroupImage(isAdd ? 'welcome' : 'goodbye', groupId);
       if (!imageBuffer) {
         try {
           const ppUrl = await sock.profilePictureUrl(participantJid, 'image');
           if (ppUrl) imageBuffer = await fetchBuffer(ppUrl);
         } catch {
-          // privacy settings or no picture — not an error
+          // Privacy settings or missing picture — continue with text-only output.
         }
       }
 
-      // ── Send ─────────────────────────────────────────────────────────
       if (imageBuffer) {
         await sock.sendMessage(groupJid, {
-          image:    imageBuffer,
-          caption:  caption,
-          mentions: [participantJid]
+          image: imageBuffer,
+          caption,
+          mentions: [participantJid],
         });
       } else {
         await sock.sendMessage(groupJid, {
-          text:     caption,
-          mentions: [participantJid]
+          text: caption,
+          mentions: [participantJid],
         });
       }
-
     } catch (err) {
       console.error(`[welcome] failed for ${participantJid} in ${groupJid}:`, err.message);
     }
   }
 }
 
-module.exports = { handleParticipantUpdate, IMAGES_DIR };
+// Accept one update, an array of updates, or a wrapper that exposes the
+// update fields. Returning a promise lets primary and secondary sessions use
+// the exact same handler.
+async function handleParticipantUpdate(sock, input) {
+  const updates = normalizeParticipantUpdates(input);
+  for (const update of updates) {
+    await handleSingleParticipantUpdate(sock, update);
+  }
+}
+
+module.exports = {
+  handleParticipantUpdate,
+  normalizeParticipantUpdates,
+  normalizeAction,
+  IMAGES_DIR,
+};
