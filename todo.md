@@ -18,5 +18,5 @@
 - [x] Run the focused bot tests and syntax checks, then document VPS restart steps.
 
 - [x] Audit both repositories before publishing and confirm secrets, sessions, database data, and local environment files remain excluded.
-- [ ] Commit and push the completed bot changes to the Vegas-MD `main` branch.
-- [ ] Commit and push the completed control-center dashboard changes to its GitHub `main` branch.
+- [x] Commit and push the completed bot changes to the Vegas-MD `main` branch.
+- [x] Commit and push the completed control-center dashboard changes to its GitHub `main` branch.
