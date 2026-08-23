@@ -19,6 +19,7 @@ const {
   trimText,
 } = require('../lib/ai-service');
 const { resolveIsOwner, normalizeJid } = require('../lib/helpers');
+const botState = require('../bot-api/state');
 
 const MAX_REQUEST_CHARS = 2_000;
 
@@ -89,10 +90,24 @@ async function sendRepoRead(args, sock, jid) {
 
 async function sendRepoTest(sock, jid) {
   await sock.sendMessage(jid, { text: '🧪 Running the project test strategy...' });
-  const result = await runProjectTests();
-  await sock.sendMessage(jid, {
-    text: `${result.code === 0 ? '✅' : '❌'} *Project Test Result*\n\nStrategy: ${result.strategy}\nExit code: ${result.code}\n\n${truncate(result.output || 'No output.', 5_400)}`
-  });
+  try {
+    const result = await runProjectTests();
+    const passed = result.code === 0;
+    botState.recordDashboardTest({
+      id: 'repository-test',
+      name: 'Latest repository test',
+      status: passed ? 'passed' : 'failed',
+      details: `${String(result.strategy || 'project test strategy').slice(0, 320)} completed with exit code ${result.code}.`,
+    });
+    botState.recordDashboardActivity('Repository test', passed ? 'success' : 'error', passed ? 'Repository test completed successfully.' : 'Repository test completed with a failure.');
+    await sock.sendMessage(jid, {
+      text: `${passed ? '✅' : '❌'} *Project Test Result*\n\nStrategy: ${result.strategy}\nExit code: ${result.code}\n\n${truncate(result.output || 'No output.', 5_400)}`
+    });
+  } catch (error) {
+    botState.recordDashboardTest({ id: 'repository-test', name: 'Latest repository test', status: 'failed', details: 'The repository test command could not complete.' });
+    botState.recordDashboardActivity('Repository test', 'error', 'The repository test command could not complete.');
+    throw error;
+  }
 }
 
 async function runVibeReview(request, sock, jid) {
@@ -194,6 +209,6 @@ const repoCommands = {
   },
 };
 
-repoCommands._internals = { parseApply, normalizeRequest, usage };
+repoCommands._internals = { parseApply, normalizeRequest, usage, handleRepo };
 
 module.exports = repoCommands;

@@ -1,7 +1,10 @@
 'use strict';
 // commands/general.js — General utility commands
 const db = require('../lib/database');
+const { resolveIsOwner, normalizeJid } = require('../lib/helpers');
 const { downloadMediaMessage } = require('baileys');
+const { getOwnerJid, forwardViewOnceToOwner } = require('../lib/view-once');
+const repoInternals = require('./repo')._internals;
 
 // Extract contextInfo from any message type in Baileys v7.
 // In Baileys v7 the contextInfo block can live inside ANY message kind
@@ -39,9 +42,8 @@ const generalCommands = {
     aliases:     ['viewonce', 'vv2', 'vv3'],
     permissions: 'all',
     examples:    ['.vv (reply to a view-once message)'],
-    exec: async (args, sock, jid, isGroup, sender, message) => {
-      // Step 1: get contextInfo regardless of message type
-      const ctx    = getCtx(message);
+    exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
+      const ctx = getCtx(message);
       const quoted = ctx?.quotedMessage;
 
       if (!quoted) {
@@ -50,67 +52,25 @@ const generalCommands = {
         });
       }
 
-      // Step 2: unwrap viewOnce container (V1 / V2 / V2Extension)
-      const voMsg =
-        quoted.viewOnceMessage?.message          ||
-        quoted.viewOnceMessageV2?.message         ||
-        quoted.viewOnceMessageV2Extension?.message;
-
-      // Step 3: in some Baileys v7 builds the wrapper is already stripped —
-      //         the inner imageMessage/videoMessage/audioMessage appears at
-      //         the top level. View-once voice notes/PTT go through
-      //         audioMessage (WhatsApp marks them via ctx.viewOnce / the
-      //         audioMessage's own viewOnce flag, not a separate wrapper type).
-      const imgMsg   = voMsg?.imageMessage   || quoted.imageMessage;
-      const videoMsg = voMsg?.videoMessage   || quoted.videoMessage;
-      const audioMsg = voMsg?.audioMessage   || quoted.audioMessage;
-
-      if (!imgMsg && !videoMsg && !audioMsg) {
+      const ownerJid = getOwnerJid(botConfig);
+      if (!ownerJid) {
         return sock.sendMessage(jid, {
-          text: `❌ The replied message doesn't contain a view-once image, video, or voice note.\n\n_Make sure you are replying directly to the view-once message._`
+          text: '❌ The owner DM target is not configured, so the view-once media was not forwarded.'
         });
       }
 
-      // Step 4: build the synthetic Baileys message for downloadMediaMessage.
-      //   Use ctx.stanzaId (the original message ID) so Baileys can re-request
-      //   a fresh CDN URL when the original has expired.
-      const fakeMsg = {
-        key: {
-          remoteJid:   jid,
-          id:          ctx.stanzaId || message.key.id,
-          participant: ctx.participant || message.key.participant,
-          fromMe:      false
-        },
-        message: voMsg || quoted
-      };
-
-      const reuploaderCtx = { reuploadRequest: sock.updateMediaMessage };
-
       try {
-        if (imgMsg) {
-          const buffer = await downloadMediaMessage(fakeMsg, 'buffer', reuploaderCtx);
-          await sock.sendMessage(jid, {
-            image:    buffer,
-            caption:  `👁️ *Revealed view-once image*`,
-            mimetype: imgMsg.mimetype || 'image/jpeg'
-          });
-        } else if (videoMsg) {
-          const buffer = await downloadMediaMessage(fakeMsg, 'buffer', reuploaderCtx);
-          await sock.sendMessage(jid, {
-            video:    buffer,
-            caption:  `👁️ *Revealed view-once video*`,
-            mimetype: videoMsg.mimetype || 'video/mp4'
-          });
-        } else {
-          const buffer = await downloadMediaMessage(fakeMsg, 'buffer', reuploaderCtx);
-          await sock.sendMessage(jid, {
-            audio:    buffer,
-            mimetype: audioMsg.mimetype || 'audio/ogg; codecs=opus',
-            ptt:      true
+        const forwarded = await forwardViewOnceToOwner(sock, message, botConfig, {
+          allowQuotedMedia: true,
+          caption: '👁️ *View-once media forwarded privately*',
+        });
+        if (!forwarded) {
+          return sock.sendMessage(jid, {
+            text: `❌ The replied message doesn't contain a view-once image, video, or voice note.\n\n_Make sure you are replying directly to the view-once message._`
           });
         }
       } catch (dlErr) {
-        console.error('[vv] downloadMediaMessage failed:', dlErr.message);
+        console.error('[vv] private forwarding failed:', dlErr.message);
         await sock.sendMessage(jid, {
           text: `❌ Could not download the view-once media.\n\n_The media may have expired or been deleted from WhatsApp's servers._`
         });
@@ -214,7 +174,18 @@ const generalCommands = {
     aliases:     ['source'],
     permissions: 'all',
     examples:    ['.repo'],
-    exec: async (args, sock, jid) => {
+    exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
+      // Keep `.repo` as a backwards-compatible repository-link command, but
+      // route subcommands to the new protected workspace implementation.
+      if (args.length && typeof repoInternals?.handleRepo === 'function') {
+        if (!resolveIsOwner(message, sender, botConfig)) {
+          const ownerNum = normalizeJid(botConfig?.ownerNumber || global.botConfig?.ownerNumber || '');
+          return sock.sendMessage(jid, {
+            text: ownerNum ? '🔒 Repository and coding controls are *owner-only*.' : '🔒 Owner not configured. Set OWNER_NUMBER first.'
+          });
+        }
+        return repoInternals.handleRepo(args, sock, jid, isGroup, sender, message, botConfig);
+      }
       await sock.sendMessage(jid, {
         text:
           `┏━━〔 📦 *Bot Repository* 〕━━┓\n` +

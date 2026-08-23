@@ -469,7 +469,7 @@ const ownerCommands = {
           text:
             `🗑️ *Anti-Delete: ${v ? '✅ Enabled' : '❌ Disabled'}*\n\n` +
             (v
-              ? `_Your bot will now re-post deleted DM messages.\n_Also run .antidelete inside any group to enable it there._`
+              ? `_Deleted messages will be recovered only in your personal DM.\n_The source chat will not receive a recovery copy._`
               : `_Anti-delete is now off for your session._`)
         });
       }
@@ -482,7 +482,7 @@ const ownerCommands = {
         text:
           `🗑️ *Anti-Delete: ${newVal ? '✅ Enabled' : '❌ Disabled'}*\n\n` +
           (newVal
-            ? `_If someone deletes a message in our chat, you'll be notified._`
+            ?         `_If someone deletes a message, the recovery will appear only in your personal DM._`
             : `_You won't be notified of deleted messages in our chat._`)
       });
     }

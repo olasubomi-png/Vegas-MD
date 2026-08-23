@@ -969,7 +969,25 @@ async function sendVideoFromUrl(sock, jid, videoUrl, caption) {
 }
 
 async function sendAudioFromUrl(sock, jid, audioUrl, caption) {
-  await sock.sendMessage(jid, { audio: { url: audioUrl }, mimetype: 'audio/mpeg', ptt: false });
+  if (!audioUrl || typeof audioUrl !== 'string') throw new Error('Music provider returned an empty audio URL');
+
+  // Download first so Baileys does not have to follow a provider redirect or
+  // signed CDN URL itself. Keep a direct-URL fallback for providers that reject
+  // server-side buffering but still allow WhatsApp to fetch the media.
+  try {
+    const media = await downloadMedia(audioUrl, {
+      maxBytes: MAX_AUDIO_BYTES,
+      timeout: 120_000,
+    });
+    await sock.sendMessage(jid, {
+      audio: media.buffer,
+      mimetype: media.contentType || 'audio/mpeg',
+      ptt: false,
+    });
+  } catch (downloadError) {
+    console.warn(`[music] buffered audio download failed: ${downloadError.message}; trying direct media URL`);
+    await sock.sendMessage(jid, { audio: { url: audioUrl }, mimetype: 'audio/mpeg', ptt: false });
+  }
   if (caption) await sock.sendMessage(jid, { text: caption });
 }
 
@@ -1012,9 +1030,10 @@ async function sendProviderMedia(sock, jid, media, caption) {
 
 async function sendDavidCyrilMusicFallback(query, sock, jid) {
   const errors = [];
-  for (const endpoint of ['song', 'play']) {
+  for (const endpoint of ['play', 'song']) {
     try {
       const music = await fetchMusic(query, endpoint);
+      if (!music.downloadUrl) throw new Error('Music provider returned no playable audio');
       const details = [
         `🎵 *${music.title}*`,
         music.artist ? `👤 ${music.artist}` : '',

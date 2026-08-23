@@ -2,6 +2,7 @@
 
 const assert = require('assert');
 const db = require('../lib/database');
+const botState = require('../bot-api/state');
 const { handleParticipantUpdate, normalizeParticipantUpdates } = require('../events/welcome');
 
 (async () => {
@@ -14,6 +15,7 @@ const { handleParticipantUpdate, normalizeParticipantUpdates } = require('../eve
   });
 
   const sent = [];
+  botState.dashboardActivity = [];
   const sock = {
     groupMetadata: async () => ({ subject: 'Vegas Test', participants: [{ id: '111@s.whatsapp.net' }, { id: '222@s.whatsapp.net' }] }),
     profilePictureUrl: async () => { throw new Error('no profile picture'); },
@@ -27,6 +29,10 @@ const { handleParticipantUpdate, normalizeParticipantUpdates } = require('../eve
   assert.strictEqual(sent.length, 1, 'a single participant must generate one welcome');
   assert.match(sent[0].payload.text, /@111/);
   assert.match(sent[0].payload.text, /Vegas Test/);
+  const dashboardActivity = botState.getDashboardActivity();
+  assert.strictEqual(dashboardActivity[0].type, 'Group automation');
+  assert.strictEqual(dashboardActivity[0].message, 'Delivered a welcome message.');
+  assert.doesNotMatch(dashboardActivity[0].message, /111|Vegas Test/);
 
   sent.length = 0;
   await handleParticipantUpdate(sock, { id: '123@g.us', participants: ['111@s.whatsapp.net'], action: 'remove' });

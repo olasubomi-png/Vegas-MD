@@ -206,7 +206,7 @@ Vegas-MD now includes an optional assistant layer:
 
 The `.setwelcome` and `.setgoodbye` settings are applied to WhatsApp participant-update events. The handler accepts both single and batch updates, recognizes new-member, voluntary-leave, and kick/removal action variants, and falls back to text when a member profile picture cannot be fetched.
 
-When `ZST_API_KEY` is configured, `.chat` and opt-in `.freechat` use the official ZST Labs DeepAI V2 chat endpoint (`/api/v1/ai/deepai-v2/chat`) with the `x-api-key` header and `ZST_CHAT_MODEL`. They fall back to the existing OpenAI/keyless text path if ZST is unavailable. Repository-aware `.vibe` and `.workrepo` operations continue to use the private AI path and never send repository source to a public fallback.
+When `ZST_API_KEY` is configured, `.chat`, `.code`, and opt-in `.freechat` use the official ZST Labs DeepAI V2 chat endpoint (`/api/v1/ai/deepai-v2/chat`) with the `x-api-key` header and `ZST_CHAT_MODEL`. They fall back to the configured OpenAI-compatible path, or the legacy Pollinations path when available. Anonymous Pollinations requests may return HTTP 402, so configure `POLLINATIONS_API_KEY` for a reliable keyless-provider alternative. Repository-aware `.vibe` and `.workrepo` operations remain private by default and require `OPENAI_API_KEY`; set `ZST_REPO_AI_ENABLED=true` only when you explicitly accept sending the bounded repository snapshot to ZST.
 
 Free Chat is deliberately **off by default** and is controlled per bot owner/session. The bot ignores its own generated replies, keeps only a short in-memory conversation window, and does not treat unknown prefixed messages as free-chat prompts. The existing `.tts` command remains available as a free Google-backed voice-note option when `OPENAI_API_KEY` is not configured.
 
@@ -215,6 +215,32 @@ The repository-aware coding assistant is owner-only. It defaults to the director
 The `.imagine` command keeps its existing Pollinations providers and now uses the official ZST Labs `GET /api/v1/ai/image` endpoint as a final text-to-image fallback. The implementation sends the documented `x-api-key` header, requests the JSON URL form with `url=true`, downloads the returned image server-side, enforces a size limit, and sends the image as a WhatsApp attachment. Configure `ZST_IMAGE_MODEL`, `ZST_IMAGE_WIDTH`, `ZST_IMAGE_HEIGHT`, and `ZST_IMAGE_ENHANCE` as needed. The Azbry scraper page currently identifies itself as `YT Search & YT mp3`, but its request contract is protected and could not be verified, so it was not guessed or wired into production code.
 
 For best reliability, configure `OPENAI_API_KEY` for coding help and free chat; these text features fall back to a public text provider when no key is available. The `.speak` command requires `OPENAI_API_KEY`. You can select models with `CODING_AI_MODEL`, `FREE_CHAT_AI_MODEL`, and `AI_MODEL`. The speech command uses `OPENAI_TTS_MODEL` and `OPENAI_TTS_VOICE`. The David Cyril integrations use `DAVID_CYRIL_API_BASE` and support polling controls through `AI_MUSIC_POLL_ATTEMPTS` and `AI_MUSIC_POLL_DELAY_MS`; see `.env.example` for the complete optional configuration.
+
+## Deploying the latest bot fixes with PM2
+
+From the VPS checkout, update the working tree to the branch or commit containing these changes, install dependencies, and restart the existing PM2 app:
+
+```bash
+cd ~/Vegas-MD
+git pull --ff-only
+npm install
+pm2 restart Vegas-MD --update-env
+pm2 save
+pm2 status
+```
+
+Before testing WhatsApp behavior, confirm the changed modules parse and run the focused regressions:
+
+```bash
+node --check lib/view-once.js
+node --check events/protection.js
+node --check commands/general.js
+node --check commands/download.js
+node tests/protection-play.test.js
+node tests/play-provider.test.js
+```
+
+The anti-delete and view-once changes are intentionally **owner-DM-only**. If `OWNER_NUMBER` or `ownerJid` is missing, the bot refuses to forward recovered content rather than posting it publicly. The `.play` path now buffers safe HTTPS audio when possible and falls back to the direct media URL only if buffering fails. Keep provider errors in the PM2 logs; do not paste environment values or tokens into chat.
 
 ## License
 

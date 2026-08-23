@@ -3,6 +3,8 @@
 const EventEmitter = require('events');
 
 const MAX_LOGS = 500;
+const MAX_DASHBOARD_ACTIVITY = 100;
+const MAX_DASHBOARD_TESTS = 25;
 
 class BotState extends EventEmitter {
   constructor() {
@@ -15,6 +17,8 @@ class BotState extends EventEmitter {
     this.prefix = '.';
     this.mode = 'private';
     this.logs = [];
+    this.dashboardActivity = [];
+    this.dashboardTests = [];
     this.stats = { commandsRun: 0, messagesSeen: 0, groupsSeen: 0, usersSeen: 0 };
     this.sockRef = null; // set by main.js once baileys sock is created
   }
@@ -34,6 +38,41 @@ class BotState extends EventEmitter {
     this.logs.push(entry);
     if (this.logs.length > MAX_LOGS) this.logs.shift();
     this.emit('log', entry);
+  }
+
+  recordDashboardActivity(type, status, message) {
+    const entry = {
+      id: `activity-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+      type: String(type).slice(0, 120),
+      status: ['success', 'warning', 'error', 'info'].includes(status) ? status : 'info',
+      message: String(message).slice(0, 500),
+      occurredAt: new Date().toISOString(),
+    };
+    this.dashboardActivity.push(entry);
+    if (this.dashboardActivity.length > MAX_DASHBOARD_ACTIVITY) this.dashboardActivity.shift();
+    return entry;
+  }
+
+  getDashboardActivity() {
+    return this.dashboardActivity.slice(-MAX_DASHBOARD_ACTIVITY).reverse();
+  }
+
+  recordDashboardTest({ id, name, status, details }) {
+    const entry = {
+      id: String(id || `test-${Date.now()}`).slice(0, 120),
+      name: String(name || 'Bot diagnostic').slice(0, 180),
+      status: ['passed', 'failed', 'running', 'unknown'].includes(status) ? status : 'unknown',
+      details: String(details || '').slice(0, 500),
+      completedAt: new Date().toISOString(),
+    };
+    this.dashboardTests = this.dashboardTests.filter(test => test.id !== entry.id);
+    this.dashboardTests.push(entry);
+    if (this.dashboardTests.length > MAX_DASHBOARD_TESTS) this.dashboardTests.shift();
+    return entry;
+  }
+
+  getDashboardTests() {
+    return this.dashboardTests.slice(-MAX_DASHBOARD_TESTS).reverse();
   }
 
   bumpStat(key, by = 1) {

@@ -22,6 +22,26 @@ function getConversationKey(ownerJid, jid) {
   return `${ownerJid || 'default'}|${jid || 'unknown'}`;
 }
 
+function resolveOwnerJid(botConfig, sock, jid) {
+  const configured = botConfig?.ownerJid || botConfig?.ownerNumber || '';
+  const configuredDigits = String(configured).replace(/\D/g, '');
+  if (configuredDigits) return `${configuredDigits}@s.whatsapp.net`;
+
+  // Older deployments may not have OWNER_NUMBER set. When the owner uses the
+  // linked phone in a private chat, the private chat JID is a safe fallback for
+  // the per-owner settings key; never use a group JID as the owner identity.
+  if (sock?.user?.id) {
+    const socketDigits = String(sock.user.id).replace(/\D/g, '');
+    if (socketDigits) return `${socketDigits}@s.whatsapp.net`;
+  }
+  if (messageIsFromOwner(botConfig, jid) && !String(jid || '').endsWith('@g.us')) return jid;
+  return '';
+}
+
+function messageIsFromOwner(botConfig, jid) {
+  return Boolean(botConfig?.ownerJid || botConfig?.ownerNumber || jid);
+}
+
 function getHistory(key) {
   return freeChatHistory.get(key) || [];
 }
@@ -90,10 +110,13 @@ async function handleCoding(args, sock, jid, _isGroup, _sender, message, botConf
 
   await sock.sendMessage(jid, { text: '💻 *Coding Assistant* is reviewing your request…' });
   try {
-    const answer = await askText([
+    const answer = await askChat([
       { role: 'system', content: getCodingSystemPrompt(botConfig?.name || 'Vegas-MD') },
       { role: 'user', content: query },
-    ], { model: process.env.CODING_AI_MODEL || process.env.AI_MODEL || 'gpt-4o-mini', maxTokens: 1_200 });
+      ], {
+        model: process.env.CODING_AI_MODEL || process.env.AI_MODEL || 'gpt-4o-mini',
+        maxTokens: 1_200,
+      });
     await sock.sendMessage(jid, { text: `💻 *Coding Assistant*\n\n${answer}` });
   } catch (error) {
     console.error('[assistant] coding request failed:', error.message);
@@ -136,7 +159,7 @@ async function handleClearChat(args, sock, jid, _isGroup, _sender, message, botC
 }
 
 async function handleFreeChat({ text, sock, jid, sender, botConfig, isGroup, message }) {
-  const ownerJid = botConfig?.ownerJid || botConfig?.ownerNumber || '';
+  const ownerJid = resolveOwnerJid(botConfig, sock, jid);
   const enabled = db.getOwnerSetting(ownerJid, 'freeChat', false) === true;
   if (!enabled || !text) return false;
   if (message?.key?.fromMe === true && isBotGenerated(message.key.id)) return false;

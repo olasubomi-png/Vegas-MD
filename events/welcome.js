@@ -9,8 +9,8 @@
 const fs    = require('fs');
 const path  = require('path');
 const http  = require('http');
-const https = require('https');
-const db    = require('../lib/database');
+const db = require('../lib/database');
+const botState = require('../bot-api/state');
 
 const IMAGES_DIR = path.join(__dirname, '../data/group_images');
 fs.mkdirSync(IMAGES_DIR, { recursive: true });
@@ -151,7 +151,17 @@ async function handleSingleParticipantUpdate(sock, { id: groupJid, participants,
           mentions: [participantJid],
         });
       }
+      botState.recordDashboardActivity(
+        'Group automation',
+        'success',
+        `Delivered a ${isAdd ? 'welcome' : 'goodbye'} message.`
+      );
     } catch (err) {
+      botState.recordDashboardActivity(
+        'Group automation',
+        'error',
+        `A ${isAdd ? 'welcome' : 'goodbye'} message could not be delivered.`
+      );
       console.error(`[welcome] failed for ${participantJid} in ${groupJid}:`, err.message);
     }
   }

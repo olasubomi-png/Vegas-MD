@@ -6,6 +6,7 @@
 const db = require('../lib/database');
 const { hasURL, normalizeJid, isGroupAdmin, resolveIsOwner, getMessageText } = require('../lib/helpers');
 const { downloadMediaMessage } = require('baileys');
+const { getOwnerJid, forwardViewOnceToOwner } = require('../lib/view-once');
 
 // ─── In-memory message cache (for anti-delete) ────────────
 // Keyed by message ID.  Stores enough info to re-post deleted messages.
@@ -105,87 +106,61 @@ async function handleAntiDelete(sock, deletedKeys, botConfig) {
 
     const senderNum = cached.sender.split('@')[0];
 
-    // Owner JID for DM notification — prefer the per-session ownerJid from botConfig
-    const ownerNum = (botConfig?.ownerJid || '').replace(/[@:].*/g, '') ||
-                     (process.env.OWNER_NUMBER || '').replace(/\D/g, '');
-    const ownerJid = ownerNum ? `${ownerNum}@s.whatsapp.net` : null;
+    // All recoveries go to the configured owner’s personal DM. Never post the
+    // recovered message back into the source group or the other participant’s DM.
+    // Fail closed when the owner target is unavailable rather than leaking content.
+    const ownerJid = getOwnerJid(botConfig);
+    if (!ownerJid) {
+      console.warn('[antiDelete] owner JID unavailable; refusing to resend deleted content');
+      msgCache.delete(msgId);
+      continue;
+    }
 
     try {
-      if (isGroup) {
-        // Groups: re-post the deleted content in the group, then also notify owner
-        if (cached.mediaType && cached.rawMessage) {
-          try {
-            const buffer = await downloadMediaMessage(cached.rawMessage, 'buffer', {});
-            if (cached.mediaType === 'image') {
-              await sock.sendMessage(chatJid, {
-                image:    buffer,
-                caption:  `🗑️ *Anti-Delete* — @${senderNum} deleted:\n${cached.text}`,
-                mentions: [cached.sender]
-              });
-            } else if (cached.mediaType === 'video') {
-              await sock.sendMessage(chatJid, {
-                video:    buffer,
-                caption:  `🗑️ *Anti-Delete* — @${senderNum} deleted:\n${cached.text}`,
-                mentions: [cached.sender]
-              });
-            } else if (cached.mediaType === 'audio') {
-              await sock.sendMessage(chatJid, {
-                audio:    buffer,
-                mimetype: 'audio/ogg; codecs=opus',
-                ptt:      true,
-              });
-              await sock.sendMessage(chatJid, {
-                text:     `🗑️ *Anti-Delete* — @${senderNum} deleted a voice note`,
-                mentions: [cached.sender]
-              });
-            } else if (cached.mediaType === 'sticker') {
-              await sock.sendMessage(chatJid, { sticker: buffer });
-              await sock.sendMessage(chatJid, {
-                text:     `🗑️ *Anti-Delete* — @${senderNum} deleted a sticker`,
-                mentions: [cached.sender]
-              });
-            } else {
-              await sock.sendMessage(chatJid, {
-                text:     `🗑️ *Anti-Delete Alert*\n\n@${senderNum} deleted: _${cached.text}_`,
-                mentions: [cached.sender]
-              });
-            }
-          } catch (_mediaErr) {
-            await sock.sendMessage(chatJid, {
-              text:     `🗑️ *Anti-Delete Alert*\n\n@${senderNum} deleted a ${cached.mediaType} message.`,
-              mentions: [cached.sender]
-            });
-          }
-        } else {
-          // Plain text in group
-          await sock.sendMessage(chatJid, {
-            text:     `🗑️ *Anti-Delete Alert*\n\n@${senderNum} deleted:\n\n"${cached.text}"`,
-            mentions: [cached.sender]
-          });
-        }
+      const contextLabel = isGroup ? 'group' : 'private chat';
+      const caption = `🗑️ *Anti-Delete* — recovered a deleted ${contextLabel} message.` +
+        (cached.text ? `\n\n${cached.text}` : '');
 
-        // Also notify owner via DM with group context
-        if (ownerJid && ownerJid !== chatJid) {
+      if (cached.mediaType && cached.rawMessage) {
+        const buffer = await downloadMediaMessage(cached.rawMessage, 'buffer', {
+          reuploadRequest: sock.updateMediaMessage,
+        });
+        const original = cached.rawMessage.message || {};
+        const mediaNode = original[`${cached.mediaType}Message`] || {};
+        if (cached.mediaType === 'image') {
           await sock.sendMessage(ownerJid, {
-            text:
-              `🗑️ *Anti-Delete (Group)*\n\n` +
-              `👤 Sender  : @${senderNum}\n` +
-              `💬 Message : ${cached.text || `[${cached.mediaType || 'Unknown'}]`}\n` +
-              `📍 Group   : ${chatJid.split('@')[0]}`
-          }).catch(() => {});
+            image: buffer,
+            caption,
+            mimetype: mediaNode.mimetype || 'image/jpeg',
+          });
+        } else if (cached.mediaType === 'video') {
+          await sock.sendMessage(ownerJid, {
+            video: buffer,
+            caption,
+            mimetype: mediaNode.mimetype || 'video/mp4',
+          });
+        } else if (cached.mediaType === 'audio') {
+          await sock.sendMessage(ownerJid, {
+            audio: buffer,
+            mimetype: mediaNode.mimetype || 'audio/ogg; codecs=opus',
+            ptt: Boolean(mediaNode.ptt),
+          });
+          if (caption) await sock.sendMessage(ownerJid, { text: caption });
+        } else if (cached.mediaType === 'sticker') {
+          await sock.sendMessage(ownerJid, { sticker: buffer });
+          if (caption) await sock.sendMessage(ownerJid, { text: caption });
+        } else if (cached.mediaType === 'document') {
+          await sock.sendMessage(ownerJid, {
+            document: buffer,
+            mimetype: mediaNode.mimetype || 'application/octet-stream',
+            fileName: mediaNode.fileName || 'recovered-document',
+            caption,
+          });
+        } else {
+          await sock.sendMessage(ownerJid, { document: buffer, fileName: 'recovered-media', caption });
         }
       } else {
-        // DM — notify in the chat itself
-        const dmText =
-          `🗑️ *Anti-Delete Alert*\n\n` +
-          `👤 *From:* @${senderNum}\n` +
-          `💬 *Message:* ${cached.text || `[${cached.mediaType || 'Media'}]`}`;
-        await sock.sendMessage(chatJid, { text: dmText, mentions: [cached.sender] });
-
-        // Also forward to owner's JID so it appears on their device
-        if (ownerJid && ownerJid !== chatJid) {
-          await sock.sendMessage(ownerJid, { text: dmText }).catch(() => {});
-        }
+        await sock.sendMessage(ownerJid, { text: caption });
       }
     } catch (err) {
       console.error('[antiDelete]', err.message);
@@ -335,51 +310,37 @@ async function handleAntiSpam(sock, message, botConfig) {
 // ─────────────────────────────────────────────────────────
 // handleAntiViewOnce
 // ─────────────────────────────────────────────────────────
-async function handleAntiViewOnce(sock, message) {
+async function handleAntiViewOnce(sock, message, botConfig) {
   const jid = message.key?.remoteJid;
   if (!jid?.endsWith('@g.us')) return false;
 
   const settings = db.getGroup(jid);
   if (!settings.antiViewOnce) return false;
 
-  const msg = message.message;
-  const viewOnceMsg =
-    msg?.viewOnceMessage?.message ||
-    msg?.viewOnceMessageV2?.message ||
-    msg?.viewOnceMessageV2Extension?.message;
-
-  if (!viewOnceMsg) return false;
-
-  const sender     = message.key?.participant || jid;
-  const senderName = sender.split('@')[0];
-
   try {
-    const fakeMsg = { key: message.key, message: viewOnceMsg };
-
-    if (viewOnceMsg.imageMessage) {
-      const buffer = await downloadMediaMessage(fakeMsg, 'buffer', {});
-      await sock.sendMessage(jid, {
-        image:    buffer,
-        caption:  `👁️ *Anti-View-Once*\nOriginally sent by @${senderName}`,
-        mentions: [sender]
-      });
-    } else if (viewOnceMsg.videoMessage) {
-      const buffer = await downloadMediaMessage(fakeMsg, 'buffer', {});
-      await sock.sendMessage(jid, {
-        video:    buffer,
-        caption:  `👁️ *Anti-View-Once*\nOriginally sent by @${senderName}`,
-        mentions: [sender]
-      });
-    } else {
-      await sock.sendMessage(jid, {
-        text:     `👁️ *Anti-View-Once*\n@${senderName} sent a view-once message (unsupported type).`,
-        mentions: [sender]
-      });
-    }
+    const forwarded = await forwardViewOnceToOwner(sock, message, botConfig, {
+      caption: '👁️ *View-once media forwarded privately*',
+    });
+    return Boolean(forwarded);
   } catch (err) {
     console.error('[antiViewOnce]', err.message);
+    return false;
   }
-  return true;
+}
+
+// Forward an owner’s quoted view-once reply to the owner’s personal DM. This
+// runs independently of the group antiViewOnce toggle so `.vv` and an owner
+// reply work even when the owner did not issue a command prefix.
+async function handleOwnerViewOnceForward(sock, message, botConfig) {
+  if (!message?.key?.fromMe) return false;
+  try {
+    return Boolean(await forwardViewOnceToOwner(sock, message, botConfig, {
+      caption: '👁️ *View-once media forwarded privately*',
+    }));
+  } catch (err) {
+    console.error('[viewOnce owner forward]', err.message);
+    return false;
+  }
 }
 
 // ─────────────────────────────────────────────────────────
@@ -577,6 +538,7 @@ module.exports = {
   handleAntiLink,
   handleAntiSpam,
   handleAntiViewOnce,
+  handleOwnerViewOnceForward,
   handleAutoReact,
   handleAntiCall,
   handleAntiChannel,

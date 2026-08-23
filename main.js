@@ -195,6 +195,7 @@ if (process.env.DASHBOARD_API_ENABLED !== 'false') {
           return fs.readdirSync(path.join(__dirname, 'plugins')).filter(f => f.endsWith('.js'));
         } catch { return []; }
       },
+      getCommandCount: () => Object.keys(allCommands || {}).length,
       broadcast: async (message, target) => {
         if (!currentSock) throw new Error('bot not connected');
         const jids = target === 'groups'
@@ -223,6 +224,7 @@ const {
   handleAntiLink,
   handleAntiSpam,
   handleAntiViewOnce,
+  handleOwnerViewOnceForward,
   handleAutoReact,
   handleAntiCall,
   handleAntiChannel,
@@ -900,11 +902,17 @@ function attachHandlers(sock, saveCreds) {
             );
           }
 
+          if (isFromMe) {
+            await handleOwnerViewOnceForward(sock, message, botConfig).catch(e =>
+              console.error('[handler] ownerViewOnceForward:', e.stack || e.message)
+            );
+          }
+
           if (!isFromMe) {
             await handleAutoReact(sock, message).catch(e =>
               console.error('[handler] autoReact:', e.stack || e.message)
             );
-            await handleAntiViewOnce(sock, message).catch(e =>
+            await handleAntiViewOnce(sock, message, botConfig).catch(e =>
               console.error('[handler] antiViewOnce:', e.stack || e.message)
             );
           }
