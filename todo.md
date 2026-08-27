@@ -27,3 +27,5 @@
 - [x] Trace why current image/video enhancement output does not show a meaningful clarity improvement and ensure provider results cannot bypass the high-quality local path.
 - [x] Permit everyone to use free-chat in direct messages and groups when the owner has explicitly enabled free-chat and group free-chat.
 - [x] Add regressions for visible enhancement pipeline selection and non-owner free-chat rejection, then publish the corrective patch.
+- [x] Restrict free-chat replies to messages that explicitly tag the bot and keep untagged conversations silent.
+- [x] Add mention-only free-chat regression coverage, validate all bot behavior, and publish the correction.

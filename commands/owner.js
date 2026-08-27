@@ -308,8 +308,8 @@ const ownerCommands = {
           text:
             `💬 *Free Chat*: ${enabled ? '✅ ON' : '❌ OFF'}\n` +
             `👥 *Group Replies*: ${groups ? '✅ ON' : '❌ OFF'}\n\n` +
-            `Use *.freechat on/off* to control natural replies.\n` +
-            `Use *.freechatgroups on/off* to allow replies in groups.`
+            `When enabled, free chat replies only after users *tag the bot*.\n` +
+            `Use *.freechatgroups on/off* to allow or block tagged group replies.`
         });
       }
       const enabled = sub === 'on';
@@ -320,7 +320,7 @@ const ownerCommands = {
       db.setOwnerSetting(ownerJid, 'freeChatGroups', enabled);
       return sock.sendMessage(jid, {
         text: enabled
-          ? '💬 *Free Chat enabled for everyone.* I will answer ordinary messages in direct chats and groups.\n\nUse *.freechatgroups off* any time to keep free chat in direct messages only.'
+          ? '💬 *Free Chat enabled for everyone.* I will answer only when someone *tags the bot* in an enabled chat.\n\nUse *.freechatgroups off* any time to block tagged group replies.'
           : '💬 *Free Chat disabled.* I will respond only to commands again.'
       });
     })

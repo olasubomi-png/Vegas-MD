@@ -110,6 +110,10 @@ Image enhancement uses the available AI enhancer first and validates that the re
 
 For replied videos, `.enhancevideo` (or `.enhance`) produces an H.264 MP4 with conservative denoise, edge detail, colour adjustment, and a high-quality CRF 17 encode. It never intentionally downscales source dimensions: smaller videos are enlarged up to 2×, while already larger videos retain their original dimensions. Images above 15 MB and videos above 45 MB are rejected before processing, and outputs above 64 MB are not sent because they are unreliable in WhatsApp.
 
+### Free-Chat Mentions
+
+Free chat is opt-in with `.freechat on`. When it is enabled, the bot replies only to messages that use WhatsApp’s real mention/tag feature for the bot account; ordinary untagged conversation is ignored. `.freechatgroups on` permits those tagged requests in groups, while `.freechatgroups off` keeps tagged free chat out of groups. Use `.chat <message>` when you want an explicit command-based AI response without a tag.
+
 ## File Structure
 
 ```

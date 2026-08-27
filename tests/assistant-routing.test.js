@@ -51,7 +51,10 @@ const botConfig = {
   mode: 'private',
   name: 'Vegas-MD',
 };
-const ownerMessage = { key: { fromMe: true, remoteJid: ownerJid, id: 'owner-message' } };
+const ownerMessage = {
+  key: { fromMe: true, remoteJid: ownerJid, id: 'owner-message' },
+  message: { extendedTextMessage: { contextInfo: { mentionedJid: [ownerJid] } } },
+};
 
 function makeSock() {
   const sent = [];
@@ -92,7 +95,10 @@ function makeSock() {
       sender: '2222222222222@s.whatsapp.net',
       botConfig,
       isGroup: false,
-      message: { key: { fromMe: false, remoteJid: '2222222222222@s.whatsapp.net', id: 'visitor-dm' } },
+      message: {
+        key: { fromMe: false, remoteJid: '2222222222222@s.whatsapp.net', id: 'visitor-dm' },
+        message: { extendedTextMessage: { contextInfo: { mentionedJid: [ownerJid] } } },
+      },
     });
     assert.strictEqual(visitorDirectHandled, true, 'enabled free-chat should reply to non-owners in direct messages');
     assert.strictEqual(visitorDirectSock.sent.at(-1).content.text, 'Stubbed assistant response');
@@ -106,10 +112,29 @@ function makeSock() {
       sender: '2222222222222@s.whatsapp.net',
       botConfig,
       isGroup: true,
-      message: { key: { fromMe: false, remoteJid: '123456789@g.us', participant: '2222222222222@s.whatsapp.net', id: 'visitor-group' } },
+      message: {
+        key: { fromMe: false, remoteJid: '123456789@g.us', participant: '2222222222222@s.whatsapp.net', id: 'visitor-group' },
+        message: { extendedTextMessage: { contextInfo: { mentionedJid: [ownerJid] } } },
+      },
     });
     assert.strictEqual(visitorGroupHandled, true, 'enabled group free-chat should reply to non-owner group members');
     assert.strictEqual(visitorGroupSock.sent.at(-1).content.text, 'Stubbed assistant response');
+
+    const untaggedSock = makeSock();
+    const untaggedHandled = await assistant.handleFreeChat({
+      text: 'ordinary group conversation',
+      sock: untaggedSock,
+      jid: '123456789@g.us',
+      sender: '2222222222222@s.whatsapp.net',
+      botConfig,
+      isGroup: true,
+      message: {
+        key: { fromMe: false, remoteJid: '123456789@g.us', participant: '2222222222222@s.whatsapp.net', id: 'untagged-group' },
+        message: { extendedTextMessage: { contextInfo: { mentionedJid: [] } } },
+      },
+    });
+    assert.strictEqual(untaggedHandled, false, 'free-chat must ignore an ordinary message without a real bot tag');
+    assert.strictEqual(untaggedSock.sent.length, 0, 'untagged free-chat must not send a reply');
 
     const codeSock = makeSock();
     await assistant.code.exec(['Explain', 'Promises'], codeSock, ownerJid, false, ownerJid, ownerMessage, botConfig);

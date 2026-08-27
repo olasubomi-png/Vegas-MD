@@ -1,7 +1,6 @@
 // commands/assistant.js — Coding helper, speech generation, and opt-in free chat.
 
 const db = require('../lib/database');
-const { resolveIsOwner } = require('../lib/helpers');
 const { isBotGenerated } = require('../lib/bot-messages');
 const {
   askText,
@@ -43,6 +42,38 @@ function messageIsFromOwner(botConfig, jid) {
   const ownerDigits = String(configured).replace(/\D/g, '');
   const senderDigits = String(jid || '').replace(/\D/g, '');
   return Boolean(ownerDigits && senderDigits && ownerDigits === senderDigits);
+}
+
+function mentionContexts(message) {
+  let node = message?.message;
+  while (node?.ephemeralMessage?.message || node?.viewOnceMessage?.message) {
+    node = node.ephemeralMessage?.message || node.viewOnceMessage?.message;
+  }
+  return [
+    node?.extendedTextMessage?.contextInfo,
+    node?.imageMessage?.contextInfo,
+    node?.videoMessage?.contextInfo,
+    node?.documentMessage?.contextInfo,
+  ].filter(Boolean);
+}
+
+function digitsFromJid(value) {
+  return String(value || '').split('@')[0].split(':')[0].replace(/\D/g, '');
+}
+
+function wasBotMentioned(message, sock, botConfig) {
+  const botNumbers = new Set([
+    botConfig?.botJid,
+    botConfig?.botNumber,
+    botConfig?.ownerJid,
+    botConfig?.ownerNumber,
+    sock?.user?.id,
+  ].map(digitsFromJid).filter(Boolean));
+
+  if (!botNumbers.size) return false;
+  return mentionContexts(message)
+    .flatMap(context => context.mentionedJid || [])
+    .some(mentionedJid => botNumbers.has(digitsFromJid(mentionedJid)));
 }
 
 function getHistory(key) {
@@ -167,6 +198,11 @@ async function handleFreeChat({ text, sock, jid, sender, botConfig, isGroup, mes
   if (!enabled || !text) return false;
   if (message?.key?.fromMe === true && isBotGenerated(message.key.id)) return false;
 
+  // Automatic chat is deliberately mention-only. Never infer a tag from plain
+  // text: WhatsApp's `mentionedJid` metadata is required to avoid accidental
+  // replies to ordinary group or direct messages.
+  if (!wasBotMentioned(message, sock, botConfig)) return false;
+
   // Free-chat is an explicit owner-controlled opt-in. When enabled, it is
   // intentionally independent of the general bot command mode so anyone can
   // converse in DMs. Group replies remain separately controlled below.
@@ -258,6 +294,6 @@ const assistantCommands = {
 };
 
 assistantCommands.handleFreeChat = handleFreeChat;
-assistantCommands._internals = { getHistory, setHistory, clearHistoryFor, parseSpeechRequest };
+assistantCommands._internals = { getHistory, setHistory, clearHistoryFor, parseSpeechRequest, wasBotMentioned };
 
 module.exports = assistantCommands;
