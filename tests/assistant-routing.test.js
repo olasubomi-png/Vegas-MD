@@ -84,6 +84,33 @@ function makeSock() {
     assert.strictEqual(freeChatSock.sent.at(-1).content.text, 'Stubbed assistant response');
     assert.strictEqual(providerCalls.at(-1).kind, 'chat');
 
+    const visitorDirectSock = makeSock();
+    const visitorDirectHandled = await assistant.handleFreeChat({
+      text: 'hello from a visitor',
+      sock: visitorDirectSock,
+      jid: '2222222222222@s.whatsapp.net',
+      sender: '2222222222222@s.whatsapp.net',
+      botConfig,
+      isGroup: false,
+      message: { key: { fromMe: false, remoteJid: '2222222222222@s.whatsapp.net', id: 'visitor-dm' } },
+    });
+    assert.strictEqual(visitorDirectHandled, true, 'enabled free-chat should reply to non-owners in direct messages');
+    assert.strictEqual(visitorDirectSock.sent.at(-1).content.text, 'Stubbed assistant response');
+
+    db.setOwnerSetting(ownerJid, 'freeChatGroups', true);
+    const visitorGroupSock = makeSock();
+    const visitorGroupHandled = await assistant.handleFreeChat({
+      text: 'hello from a group member',
+      sock: visitorGroupSock,
+      jid: '123456789@g.us',
+      sender: '2222222222222@s.whatsapp.net',
+      botConfig,
+      isGroup: true,
+      message: { key: { fromMe: false, remoteJid: '123456789@g.us', participant: '2222222222222@s.whatsapp.net', id: 'visitor-group' } },
+    });
+    assert.strictEqual(visitorGroupHandled, true, 'enabled group free-chat should reply to non-owner group members');
+    assert.strictEqual(visitorGroupSock.sent.at(-1).content.text, 'Stubbed assistant response');
+
     const codeSock = makeSock();
     await assistant.code.exec(['Explain', 'Promises'], codeSock, ownerJid, false, ownerJid, ownerMessage, botConfig);
     assert.strictEqual(codeSock.sent.length, 2, '.code should send progress and an answer');

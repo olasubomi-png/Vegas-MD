@@ -25,7 +25,9 @@ function dimensions(file) {
 async function runTest() {
   assert.match(tools._internals.imageQualityFilter('enhance'), /iw\*4/);
   assert.match(tools._internals.imageQualityFilter('enhance'), /lanczos/);
+  assert.match(tools._internals.imageQualityFilter('enhance'), /cas=/);
   assert.match(tools._internals.videoQualityFilter(), /iw\*2/);
+  assert.match(tools._internals.videoQualityFilter(4), /iw\*4/);
   assert.match(tools._internals.videoQualityFilter(), /hqdn3d/);
   assert.ok(tools.enhancevideo, 'dedicated HD video command must be registered');
   assert.ok(tools.enhance, 'generic enhancement command must remain registered');
@@ -40,6 +42,11 @@ async function runTest() {
     assert.deepStrictEqual(dimensions(outputImage), [192, 128], 'image fallback should upscale a small source by 4×');
     assert.ok(tools._internals.validImageOutput(enhancedImage));
 
+    const providerFinishedImage = await tools._internals.finishEnhancedImage(fs.readFileSync(inputImage), 'enhance');
+    const providerFinishedPath = tmp('provider-finished.jpg');
+    fs.writeFileSync(providerFinishedPath, providerFinishedImage);
+    assert.deepStrictEqual(dimensions(providerFinishedPath), [48, 32], 'provider finishing should retain provider dimensions while adding clarity');
+
     run('ffmpeg', ['-y', '-f', 'lavfi', '-i', 'testsrc2=size=64x36:rate=12', '-t', '1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', inputVideo]);
     const enhancedVideo = await tools._internals.enhanceVideoLocal(fs.readFileSync(inputVideo));
     const outputVideo = tmp('output.mp4');
@@ -49,6 +56,7 @@ async function runTest() {
     assert.deepStrictEqual([width, height], [128, 72], 'small video should be enlarged up to 2×');
     assert.ok(enhancedVideo.length >= 1_000, 'enhanced video should be a non-empty MP4 buffer');
     fs.unlinkSync(outputImage);
+    fs.unlinkSync(providerFinishedPath);
     fs.unlinkSync(outputVideo);
   } finally {
     for (const file of [inputImage, inputVideo]) {

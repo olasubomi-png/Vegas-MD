@@ -314,9 +314,13 @@ const ownerCommands = {
       }
       const enabled = sub === 'on';
       db.setOwnerSetting(ownerJid, 'freeChat', enabled);
+      // The primary switch now represents the requested public free-chat mode:
+      // both direct messages and groups may receive natural replies. Owners can
+      // still use `.freechatgroups off` afterwards when they need DM-only chat.
+      db.setOwnerSetting(ownerJid, 'freeChatGroups', enabled);
       return sock.sendMessage(jid, {
         text: enabled
-          ? '💬 *Free Chat enabled.* I will answer ordinary messages naturally in private chats.\n\nUse *.freechatgroups on* if you also want replies in groups.'
+          ? '💬 *Free Chat enabled for everyone.* I will answer ordinary messages in direct chats and groups.\n\nUse *.freechatgroups off* any time to keep free chat in direct messages only.'
           : '💬 *Free Chat disabled.* I will respond only to commands again.'
       });
     })

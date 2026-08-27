@@ -55,15 +55,15 @@ const MAX_IMAGE_INPUT_BYTES = 15 * 1024 * 1024;
 const MAX_VIDEO_INPUT_BYTES = 45 * 1024 * 1024;
 const MAX_VIDEO_OUTPUT_BYTES = 64 * 1024 * 1024;
 
-function imageQualityFilter(operation = 'enhance') {
-  const scale = "scale='ceil(max(iw,min(2560,iw*4))/2)*2':'ceil(max(ih,min(2560,ih*4))/2)*2':force_original_aspect_ratio=decrease:flags=lanczos";
-  if (operation === 'dehaze') return `${scale},eq=contrast=1.12:brightness=0.025:saturation=1.10,unsharp=5:5:0.55:5:5:0`;
-  if (operation === 'recolor') return `${scale},eq=saturation=1.35:contrast=1.05,unsharp=3:3:0.35:3:3:0`;
-  return `${scale},eq=contrast=1.035:saturation=1.06,unsharp=5:5:0.7:5:5:0`;
+function imageQualityFilter(operation = 'enhance', scaleFactor = 4) {
+  const scale = `scale='ceil(max(iw,min(2560,iw*${scaleFactor}))/2)*2':'ceil(max(ih,min(2560,ih*${scaleFactor}))/2)*2':force_original_aspect_ratio=decrease:flags=lanczos`;
+  if (operation === 'dehaze') return `${scale},eq=contrast=1.12:brightness=0.025:saturation=1.10,cas=0.35,unsharp=5:5:0.45:5:5:0`;
+  if (operation === 'recolor') return `${scale},eq=saturation=1.35:contrast=1.05,cas=0.30,unsharp=3:3:0.25:3:3:0`;
+  return `${scale},eq=contrast=1.07:saturation=1.09,cas=0.48,unsharp=5:5:0.52:5:5:0`;
 }
 
-function videoQualityFilter() {
-  return "scale='ceil(max(iw,min(2560,iw*2))/2)*2':'ceil(max(ih,min(2560,ih*2))/2)*2':force_original_aspect_ratio=decrease:flags=lanczos,hqdn3d=1.5:1.5:3:3,eq=contrast=1.035:saturation=1.06,unsharp=5:5:0.55:5:5:0";
+function videoQualityFilter(scaleFactor = 2) {
+  return `scale='ceil(max(iw,min(2560,iw*${scaleFactor}))/2)*2':'ceil(max(ih,min(2560,ih*${scaleFactor}))/2)*2':force_original_aspect_ratio=decrease:flags=lanczos,hqdn3d=1.25:1.25:2.5:2.5,eq=contrast=1.07:saturation=1.09,cas=0.45,unsharp=5:5:0.42:5:5:0`;
 }
 
 function imageMimeFromBuffer(buffer) {
@@ -154,13 +154,13 @@ function vyroAiRequest(imageBuffer, operation) {
 // Applied when the external enhancer is unavailable. It enlarges smaller images
 // up to 4× while preserving aspect ratio and avoids aggressive sharpening that
 // can create halos or false detail.
-async function enhanceLocal(imageBuffer, operation) {
+async function enhanceLocal(imageBuffer, operation, { scaleFactor = 4 } = {}) {
   const inFile  = tmpFile('.jpg');
   const outFile = tmpFile('.jpg');
   fs.writeFileSync(inFile, imageBuffer);
   try {
     await ffmpegRun(inFile, outFile, [
-      '-vf', imageQualityFilter(operation),
+      '-vf', imageQualityFilter(operation, scaleFactor),
       '-frames:v', '1',
       '-q:v', '1',
       '-pix_fmt', 'yuvj420p',
@@ -171,6 +171,13 @@ async function enhanceLocal(imageBuffer, operation) {
   } finally {
     for (const f of [inFile, outFile]) try { fs.unlinkSync(f); } catch {}
   }
+}
+
+async function finishEnhancedImage(imageBuffer, operation) {
+  // Preserve an AI provider's dimensions while applying a local final pass for
+  // contrast-adaptive clarity. This prevents weak provider output from bypassing
+  // the bot's visible quality treatment.
+  return enhanceLocal(imageBuffer, operation, { scaleFactor: 1 });
 }
 
 // ── Robust enhance: try Vyro AI, fall back to local ────────────────────────
@@ -186,7 +193,10 @@ async function enhanceImage(imageBuffer, operation) {
   try {
     const result = await vyroAiRequest(imageBuffer, operation === 'upscale' ? 'enhance' : operation);
     if (!validImageOutput(result)) throw new Error('Vyro AI returned an invalid image output');
-    return result;
+    // Provider output is not sent straight to WhatsApp. A no-resize finishing
+    // pass keeps its dimensions while applying the same visible clarity tuning
+    // as the local fallback, so a weak provider result cannot bypass it.
+    return await finishEnhancedImage(result, operation);
   } catch (e1) {
     console.warn(`[enhance] Vyro AI failed (${e1.message}), trying local fallback...`);
   }
@@ -208,7 +218,7 @@ async function enhanceImage(imageBuffer, operation) {
   }
 }
 
-async function enhanceVideoLocal(videoBuffer) {
+async function enhanceVideoLocal(videoBuffer, { scaleFactor = 2 } = {}) {
   if (!Buffer.isBuffer(videoBuffer) || videoBuffer.length < 1_000) {
     throw new Error('The quoted video is empty or invalid');
   }
@@ -222,7 +232,7 @@ async function enhanceVideoLocal(videoBuffer) {
   try {
     await ffmpegRun(inFile, outFile, [
       '-map', '0:v:0', '-map', '0:a?',
-      '-vf', videoQualityFilter(),
+      '-vf', videoQualityFilter(scaleFactor),
       '-c:v', 'libx264', '-preset', 'slow', '-crf', '17',
       '-profile:v', 'high', '-pix_fmt', 'yuv420p',
       '-c:a', 'aac', '-b:a', '192k',
@@ -470,22 +480,23 @@ const toolsCommands = {
     category: 'tools',
     desc: 'Enhance a replied video in HD without reducing its source resolution',
     usage: '.enhancevideo', aliases: ['hdvideo', 'videohd'], permissions: 'all',
-    examples: ['.enhancevideo (reply to a video)', '.enhance (reply to a video)'],
-    exec: async (_args, sock, jid, _isGroup, _sender, message) => {
+    examples: ['.enhancevideo (reply to a video)', '.enhancevideo 4x (reply to a video)', '.enhance (reply to a video)'],
+    exec: async (args, sock, jid, _isGroup, _sender, message) => {
       const quoted = getCtx(message)?.quotedMessage;
       if (!quoted?.videoMessage) {
         return sock.sendMessage(jid, {
-          text: '🎞️ *HD Video Enhance*\n\nReply to a video with *.enhancevideo* or *.enhance*.\n\nVideos must be below 45 MB; processing keeps the original resolution or upscales smaller videos up to 2×.'
+          text: '🎞️ *HD Video Enhance*\n\nReply to a video with *.enhancevideo* or *.enhance*.\nUse *.enhancevideo 4x* for stronger upscaling.\n\nVideos must be below 45 MB; processing never reduces source resolution.'
         });
       }
-      await sock.sendMessage(jid, { text: '🎞️ Enhancing video quality in HD… This can take a few minutes.' });
+      const scaleFactor = String(args[0] || '').toLowerCase() === '4x' ? 4 : 2;
+      await sock.sendMessage(jid, { text: `🎞️ Enhancing video quality in ${scaleFactor}× HD… This can take a few minutes.` });
       try {
         const source = await dlQuoted(sock, jid, message, quoted);
-        const result = await enhanceVideoLocal(source);
+        const result = await enhanceVideoLocal(source, { scaleFactor });
         await sock.sendMessage(jid, {
           video: result,
           mimetype: 'video/mp4',
-          caption: '🎞️ *HD Enhanced Video*\n\nResolution preserved or increased; detail, contrast, and noise handling improved.'
+          caption: `🎞️ *${scaleFactor}× HD Enhanced Video*\n\nResolution preserved or increased; detail, contrast, and noise handling improved.`
         });
       } catch (err) {
         await sock.sendMessage(jid, { text: `❌ Video enhancement failed: ${err.message}` });
@@ -831,6 +842,7 @@ Object.defineProperty(toolsCommands, '_internals', {
   enumerable: false,
   value: {
     enhanceLocal,
+    finishEnhancedImage,
     enhanceVideoLocal,
     imageQualityFilter,
     videoQualityFilter,

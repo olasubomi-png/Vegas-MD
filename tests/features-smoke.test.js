@@ -30,17 +30,11 @@ const ownerMessage = { key: { fromMe: true, remoteJid: botConfig.ownerJid } };
 
     await ownerCommands.freechat.exec(['on'], sock, botConfig.ownerJid, false, botConfig.ownerJid, ownerMessage, botConfig);
     assert.strictEqual(db.getOwnerSetting(botConfig.ownerJid, 'freeChat', false), true);
+    assert.strictEqual(db.getOwnerSetting(botConfig.ownerJid, 'freeChatGroups', false), true, '.freechat on should enable group replies');
 
-    const blocked = await assistant.handleFreeChat({
-      text: 'hello',
-      sock,
-      jid: '2222222222222@s.whatsapp.net',
-      sender: '2222222222222@s.whatsapp.net',
-      botConfig: { ...botConfig, mode: 'private' },
-      isGroup: false,
-      message: { key: { fromMe: false, remoteJid: '2222222222222@s.whatsapp.net' } },
-    });
-    assert.strictEqual(blocked, false, 'private mode must block non-owner free chat');
+    await ownerCommands.freechat.exec(['off'], sock, botConfig.ownerJid, false, botConfig.ownerJid, ownerMessage, botConfig);
+    assert.strictEqual(db.getOwnerSetting(botConfig.ownerJid, 'freeChat', true), false, '.freechat off should disable all free-chat replies');
+    assert.strictEqual(db.getOwnerSetting(botConfig.ownerJid, 'freeChatGroups', true), false, '.freechat off should disable group free-chat replies');
 
     assert.strictEqual(typeof assistant.code.exec, 'function');
     assert.strictEqual(typeof assistant.speak.exec, 'function');

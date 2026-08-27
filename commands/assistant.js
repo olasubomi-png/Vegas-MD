@@ -39,7 +39,10 @@ function resolveOwnerJid(botConfig, sock, jid) {
 }
 
 function messageIsFromOwner(botConfig, jid) {
-  return Boolean(botConfig?.ownerJid || botConfig?.ownerNumber || jid);
+  const configured = botConfig?.ownerJid || botConfig?.ownerNumber || '';
+  const ownerDigits = String(configured).replace(/\D/g, '');
+  const senderDigits = String(jid || '').replace(/\D/g, '');
+  return Boolean(ownerDigits && senderDigits && ownerDigits === senderDigits);
 }
 
 function getHistory(key) {
@@ -164,9 +167,9 @@ async function handleFreeChat({ text, sock, jid, sender, botConfig, isGroup, mes
   if (!enabled || !text) return false;
   if (message?.key?.fromMe === true && isBotGenerated(message.key.id)) return false;
 
-  const isOwner = resolveIsOwner(message, sender, botConfig);
-  if (botConfig?.mode === 'private' && !isOwner) return false;
-
+  // Free-chat is an explicit owner-controlled opt-in. When enabled, it is
+  // intentionally independent of the general bot command mode so anyone can
+  // converse in DMs. Group replies remain separately controlled below.
   const allowGroups = db.getOwnerSetting(ownerJid, 'freeChatGroups', false) === true;
   if (isGroup && !allowGroups) return false;
 
