@@ -99,9 +99,16 @@ npm start
 ### Tools Commands
 - `.font <text>` - Fancy text
 - `.sticker` - Convert to sticker
-- `.enhance` - Enhance image
-- `.upscale` - Upscale image
+- `.enhance` - Enhance a replied image, or automatically enhance a replied video in HD
+- `.upscale` - Upscale a replied image up to 4× while preserving aspect ratio
+- `.enhancevideo` - Enhance a replied video in HD; preserves source dimensions or upscales smaller videos up to 2×
 - `.removebg` - Remove background
+
+### Media Enhancement Quality
+
+Image enhancement uses the available AI enhancer first and validates that the returned data is a real image before delivery. If the provider is unavailable, Vegas-MD uses a local Lanczos-based 4× upscale with balanced denoise, contrast, saturation, and edge-detail processing. This avoids the old two-times resize and aggressive sharpening fallback, which could make images look artificial.
+
+For replied videos, `.enhancevideo` (or `.enhance`) produces an H.264 MP4 with conservative denoise, edge detail, colour adjustment, and a high-quality CRF 17 encode. It never intentionally downscales source dimensions: smaller videos are enlarged up to 2×, while already larger videos retain their original dimensions. Images above 15 MB and videos above 45 MB are rejected before processing, and outputs above 64 MB are not sent because they are unreliable in WhatsApp.
 
 ## File Structure
 

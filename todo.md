@@ -20,3 +20,7 @@
 - [x] Audit both repositories before publishing and confirm secrets, sessions, database data, and local environment files remain excluded.
 - [x] Commit and push the completed bot changes to the Vegas-MD `main` branch.
 - [x] Commit and push the completed control-center dashboard changes to its GitHub `main` branch.
+- [x] Improve image enhancement and upscaling quality with dimension-aware output validation and high-quality local fallback processing.
+- [x] Add a dedicated video-enhancement command that preserves source dimensions and improves visual quality without silently reducing resolution.
+- [x] Add media enhancement regression coverage, provider response validation, and deployment documentation.
+- [ ] Commit and push the image and video enhancement quality fixes to the Vegas-MD `main` branch.

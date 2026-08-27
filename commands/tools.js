@@ -51,6 +51,33 @@ function ffmpegRun(inputPath, outputPath, extraArgs = []) {
   });
 }
 
+const MAX_IMAGE_INPUT_BYTES = 15 * 1024 * 1024;
+const MAX_VIDEO_INPUT_BYTES = 45 * 1024 * 1024;
+const MAX_VIDEO_OUTPUT_BYTES = 64 * 1024 * 1024;
+
+function imageQualityFilter(operation = 'enhance') {
+  const scale = "scale='ceil(max(iw,min(2560,iw*4))/2)*2':'ceil(max(ih,min(2560,ih*4))/2)*2':force_original_aspect_ratio=decrease:flags=lanczos";
+  if (operation === 'dehaze') return `${scale},eq=contrast=1.12:brightness=0.025:saturation=1.10,unsharp=5:5:0.55:5:5:0`;
+  if (operation === 'recolor') return `${scale},eq=saturation=1.35:contrast=1.05,unsharp=3:3:0.35:3:3:0`;
+  return `${scale},eq=contrast=1.035:saturation=1.06,unsharp=5:5:0.7:5:5:0`;
+}
+
+function videoQualityFilter() {
+  return "scale='ceil(max(iw,min(2560,iw*2))/2)*2':'ceil(max(ih,min(2560,ih*2))/2)*2':force_original_aspect_ratio=decrease:flags=lanczos,hqdn3d=1.5:1.5:3:3,eq=contrast=1.035:saturation=1.06,unsharp=5:5:0.55:5:5:0";
+}
+
+function imageMimeFromBuffer(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 12) return '';
+  if (buffer[0] === 0xff && buffer[1] === 0xd8) return 'image/jpeg';
+  if (buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png';
+  if (buffer.subarray(0, 4).toString('ascii') === 'RIFF' && buffer.subarray(8, 12).toString('ascii') === 'WEBP') return 'image/webp';
+  return '';
+}
+
+function validImageOutput(buffer) {
+  return Buffer.isBuffer(buffer) && buffer.length >= 500 && Boolean(imageMimeFromBuffer(buffer));
+}
+
 async function uploadToCatbox(buffer, filename, mimetype) {
   const fd = new FormData();
   fd.append('reqtype', 'fileupload');
@@ -124,27 +151,22 @@ function vyroAiRequest(imageBuffer, operation) {
 }
 
 // ── Fallback: local ffmpeg enhancement ─────────────────────────────────────
-// Applied when all external AI APIs fail. Uses unsharp mask + upscale.
+// Applied when the external enhancer is unavailable. It enlarges smaller images
+// up to 4× while preserving aspect ratio and avoids aggressive sharpening that
+// can create halos or false detail.
 async function enhanceLocal(imageBuffer, operation) {
   const inFile  = tmpFile('.jpg');
   const outFile = tmpFile('.jpg');
   fs.writeFileSync(inFile, imageBuffer);
   try {
-    let vf;
-    if (operation === 'dehaze') {
-      // Increase contrast + brightness to simulate dehaze
-      vf = 'eq=contrast=1.4:brightness=0.05:saturation=1.2,unsharp=5:5:0.8:3:3:0';
-    } else if (operation === 'recolor') {
-      // Boost saturation strongly to simulate colorization
-      // Note: unsharp chroma sizes must be odd positive numbers (not 0)
-      vf = 'eq=saturation=2.5:contrast=1.1,unsharp=3:3:0.5:3:3:0';
-    } else {
-      // enhance — scale up 2× + unsharp mask for sharpening
-      vf = 'scale=iw*2:ih*2:flags=lanczos,unsharp=5:5:1.2:5:5:0';
-    }
-    await ffmpegRun(inFile, outFile, ['-vf', vf, '-q:v', '2']);
+    await ffmpegRun(inFile, outFile, [
+      '-vf', imageQualityFilter(operation),
+      '-frames:v', '1',
+      '-q:v', '1',
+      '-pix_fmt', 'yuvj420p',
+    ]);
     const result = fs.readFileSync(outFile);
-    if (result.length < 500) throw new Error('Local enhancement produced empty output');
+    if (!validImageOutput(result)) throw new Error('Local enhancement produced an invalid image output');
     return result;
   } finally {
     for (const f of [inFile, outFile]) try { fs.unlinkSync(f); } catch {}
@@ -153,9 +175,18 @@ async function enhanceLocal(imageBuffer, operation) {
 
 // ── Robust enhance: try Vyro AI, fall back to local ────────────────────────
 async function enhanceImage(imageBuffer, operation) {
+  if (!Buffer.isBuffer(imageBuffer) || imageBuffer.length < 500) {
+    throw new Error('The quoted image is empty or invalid');
+  }
+  if (imageBuffer.length > MAX_IMAGE_INPUT_BYTES) {
+    throw new Error('Image is too large to enhance safely. Keep it below 15 MB.');
+  }
+
   // 1. Try Vyro AI (primary)
   try {
-    return await vyroAiRequest(imageBuffer, operation);
+    const result = await vyroAiRequest(imageBuffer, operation === 'upscale' ? 'enhance' : operation);
+    if (!validImageOutput(result)) throw new Error('Vyro AI returned an invalid image output');
+    return result;
   } catch (e1) {
     console.warn(`[enhance] Vyro AI failed (${e1.message}), trying local fallback...`);
   }
@@ -174,6 +205,37 @@ async function enhanceImage(imageBuffer, operation) {
       );
     }
     throw new Error(`Enhancement failed: ${e2.message}`);
+  }
+}
+
+async function enhanceVideoLocal(videoBuffer) {
+  if (!Buffer.isBuffer(videoBuffer) || videoBuffer.length < 1_000) {
+    throw new Error('The quoted video is empty or invalid');
+  }
+  if (videoBuffer.length > MAX_VIDEO_INPUT_BYTES) {
+    throw new Error('Video is too large to enhance safely. Keep it below 45 MB.');
+  }
+
+  const inFile = tmpFile('.mp4');
+  const outFile = tmpFile('.mp4');
+  fs.writeFileSync(inFile, videoBuffer);
+  try {
+    await ffmpegRun(inFile, outFile, [
+      '-map', '0:v:0', '-map', '0:a?',
+      '-vf', videoQualityFilter(),
+      '-c:v', 'libx264', '-preset', 'slow', '-crf', '17',
+      '-profile:v', 'high', '-pix_fmt', 'yuv420p',
+      '-c:a', 'aac', '-b:a', '192k',
+      '-movflags', '+faststart',
+    ]);
+    const result = fs.readFileSync(outFile);
+    if (result.length < 1_000) throw new Error('Video enhancement produced an invalid output');
+    if (result.length > MAX_VIDEO_OUTPUT_BYTES) {
+      throw new Error('Enhanced video is too large for reliable WhatsApp delivery. Use a shorter or smaller source video.');
+    }
+    return result;
+  } finally {
+    for (const f of [inFile, outFile]) try { fs.unlinkSync(f); } catch {}
   }
 }
 
@@ -358,8 +420,8 @@ const toolsCommands = {
 
   remini: {
     category: 'sticker', desc: 'Enhance/upscale image quality with AI — no API key needed (reply to image)',
-    usage: '.remini [enhance|recolor|dehaze]', aliases: ['hd'], permissions: 'all',
-    examples: ['.remini (reply to image)', '.remini recolor', '.remini dehaze'],
+    usage: '.remini [enhance|upscale|recolor|dehaze]', aliases: ['hd'], permissions: 'all',
+    examples: ['.remini (reply to image)', '.remini upscale', '.remini recolor', '.remini dehaze'],
     exec: async (args, sock, jid, isGroup, sender, message) => {
       const ctx    = getCtx(message);
       const quoted = ctx?.quotedMessage;
@@ -374,7 +436,7 @@ const toolsCommands = {
             `_Powered by Vyro AI — free, no API key needed_`
         });
       }
-      const op = ['enhance', 'recolor', 'dehaze'].includes(args[0]) ? args[0] : 'enhance';
+      const op = ['enhance', 'upscale', 'recolor', 'dehaze'].includes(args[0]) ? args[0] : 'enhance';
       await sock.sendMessage(jid, { text: `✨ Enhancing image with AI (${op})...` });
       try {
         const buf    = await dlQuoted(sock, jid, message, quoted);
@@ -387,17 +449,48 @@ const toolsCommands = {
   },
 
   enhance: {
-    category: 'sticker', desc: 'Enhance image quality with AI (alias for remini)',
+    category: 'sticker', desc: 'Enhance image or video quality in HD (reply to media)',
     usage: '.enhance', aliases: [], permissions: 'all',
-    examples: ['.enhance (reply to an image)'],
-    exec: async (args, sock, jid, isGroup, sender, message) => toolsCommands.remini.exec(args, sock, jid, isGroup, sender, message)
+    examples: ['.enhance (reply to an image)', '.enhance (reply to a video)'],
+    exec: async (args, sock, jid, isGroup, sender, message) => {
+      const quoted = getCtx(message)?.quotedMessage;
+      if (quoted?.videoMessage) return toolsCommands.enhancevideo.exec(args, sock, jid, isGroup, sender, message);
+      return toolsCommands.remini.exec(args, sock, jid, isGroup, sender, message);
+    }
   },
 
   upscale: {
-    category: 'sticker', desc: 'Upscale image resolution with AI (alias for remini)',
+    category: 'sticker', desc: 'Upscale image resolution in HD (reply to image)',
     usage: '.upscale', aliases: [], permissions: 'all',
     examples: ['.upscale (reply to an image)'],
-    exec: async (args, sock, jid, isGroup, sender, message) => toolsCommands.remini.exec(args, sock, jid, isGroup, sender, message)
+    exec: async (_args, sock, jid, isGroup, sender, message) => toolsCommands.remini.exec(['upscale'], sock, jid, isGroup, sender, message)
+  },
+
+  enhancevideo: {
+    category: 'tools',
+    desc: 'Enhance a replied video in HD without reducing its source resolution',
+    usage: '.enhancevideo', aliases: ['hdvideo', 'videohd'], permissions: 'all',
+    examples: ['.enhancevideo (reply to a video)', '.enhance (reply to a video)'],
+    exec: async (_args, sock, jid, _isGroup, _sender, message) => {
+      const quoted = getCtx(message)?.quotedMessage;
+      if (!quoted?.videoMessage) {
+        return sock.sendMessage(jid, {
+          text: '🎞️ *HD Video Enhance*\n\nReply to a video with *.enhancevideo* or *.enhance*.\n\nVideos must be below 45 MB; processing keeps the original resolution or upscales smaller videos up to 2×.'
+        });
+      }
+      await sock.sendMessage(jid, { text: '🎞️ Enhancing video quality in HD… This can take a few minutes.' });
+      try {
+        const source = await dlQuoted(sock, jid, message, quoted);
+        const result = await enhanceVideoLocal(source);
+        await sock.sendMessage(jid, {
+          video: result,
+          mimetype: 'video/mp4',
+          caption: '🎞️ *HD Enhanced Video*\n\nResolution preserved or increased; detail, contrast, and noise handling improved.'
+        });
+      } catch (err) {
+        await sock.sendMessage(jid, { text: `❌ Video enhancement failed: ${err.message}` });
+      }
+    }
   },
 
   dehaze: {
@@ -733,5 +826,16 @@ const toolsCommands = {
     }
   }
 };
+
+Object.defineProperty(toolsCommands, '_internals', {
+  enumerable: false,
+  value: {
+    enhanceLocal,
+    enhanceVideoLocal,
+    imageQualityFilter,
+    videoQualityFilter,
+    validImageOutput,
+  },
+});
 
 module.exports = toolsCommands;
