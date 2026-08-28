@@ -669,15 +669,25 @@ const aiCommands = {
   },
   imaginevid: {
     category: 'ai',
-    desc: 'Generate an AI video from text, or animate a replied image with Runway',
+    desc: 'Generate an AI video from text, or animate a replied image with Runway (owner only)',
     usage: '.imaginevid <description>',
     aliases: [],
-    permissions: 'all',
+    permissions: 'owner',
     examples: [
       '.imaginevid a dragon flying over a futuristic city',
       '(reply to image) .imaginevid make the character slowly walk toward the camera'
     ],
-    exec: async (args, sock, jid, _isGroup, _sender, message) => {
+    exec: async (args, sock, jid, _isGroup, sender, message, botConfig) => {
+      // Owner-only — paid Runway generations
+      const isOwner =
+        message?._isOwner === true ||
+        (botConfig && require('../lib/helpers').resolveIsOwner(message, sender, botConfig));
+      if (!isOwner) {
+        return sock.sendMessage(jid, {
+          text: '🔒 This command is *owner-only*.'
+        });
+      }
+
       const prompt = args.join(' ').trim();
       if (!prompt) {
         return sock.sendMessage(jid, {
