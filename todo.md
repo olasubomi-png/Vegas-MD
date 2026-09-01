@@ -29,3 +29,6 @@
 - [x] Add regressions for visible enhancement pipeline selection and non-owner free-chat rejection, then publish the corrective patch.
 - [x] Restrict free-chat replies to messages that explicitly tag the bot and keep untagged conversations silent.
 - [x] Add mention-only free-chat regression coverage, validate all bot behavior, and publish the correction.
+
+- [x] Allow enabled free-chat to reply when a user directly replies to a bot message, while keeping unrelated untagged messages silent.
+- [x] Add reply-to-bot routing regression coverage, validate the full suite, and publish the correction to GitHub main.

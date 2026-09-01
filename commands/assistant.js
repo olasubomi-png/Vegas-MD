@@ -46,13 +46,26 @@ function messageIsFromOwner(botConfig, jid) {
 
 function mentionContexts(message) {
   let node = message?.message;
-  while (node?.ephemeralMessage?.message || node?.viewOnceMessage?.message) {
-    node = node.ephemeralMessage?.message || node.viewOnceMessage?.message;
+  while (
+    node?.ephemeralMessage?.message ||
+    node?.ephemeralMessageV2Extension?.message ||
+    node?.viewOnceMessage?.message ||
+    node?.viewOnceMessageV2?.message ||
+    node?.viewOnceMessageV2Extension?.message
+  ) {
+    node =
+      node.ephemeralMessage?.message ||
+      node.ephemeralMessageV2Extension?.message ||
+      node.viewOnceMessage?.message ||
+      node.viewOnceMessageV2?.message ||
+      node.viewOnceMessageV2Extension?.message;
   }
   return [
     node?.extendedTextMessage?.contextInfo,
     node?.imageMessage?.contextInfo,
     node?.videoMessage?.contextInfo,
+    node?.audioMessage?.contextInfo,
+    node?.stickerMessage?.contextInfo,
     node?.documentMessage?.contextInfo,
   ].filter(Boolean);
 }
@@ -61,19 +74,38 @@ function digitsFromJid(value) {
   return String(value || '').split('@')[0].split(':')[0].replace(/\D/g, '');
 }
 
-function wasBotMentioned(message, sock, botConfig) {
-  const botNumbers = new Set([
+function knownBotNumbers(sock, botConfig) {
+  return new Set([
     botConfig?.botJid,
     botConfig?.botNumber,
     botConfig?.ownerJid,
     botConfig?.ownerNumber,
     sock?.user?.id,
   ].map(digitsFromJid).filter(Boolean));
+}
 
+function wasBotMentioned(message, sock, botConfig) {
+  const botNumbers = knownBotNumbers(sock, botConfig);
   if (!botNumbers.size) return false;
   return mentionContexts(message)
     .flatMap(context => context.mentionedJid || [])
     .some(mentionedJid => botNumbers.has(digitsFromJid(mentionedJid)));
+}
+
+function wasBotRepliedTo(message, sock, botConfig) {
+  const botNumbers = knownBotNumbers(sock, botConfig);
+  return mentionContexts(message).some(context => {
+    const stanzaId = context?.stanzaId || context?.quotedMessage?.key?.id;
+    const quotedParticipant = context?.participant || context?.quotedMessage?.key?.participant;
+
+    // The short-lived registry catches bot messages whose quoted participant is
+    // omitted by WhatsApp, while the participant check continues to work after
+    // a restart when the original bot message is no longer in memory.
+    return Boolean(
+      (stanzaId && isBotGenerated(stanzaId)) ||
+      (quotedParticipant && botNumbers.has(digitsFromJid(quotedParticipant)))
+    );
+  });
 }
 
 function getHistory(key) {
@@ -198,10 +230,9 @@ async function handleFreeChat({ text, sock, jid, sender, botConfig, isGroup, mes
   if (!enabled || !text) return false;
   if (message?.key?.fromMe === true && isBotGenerated(message.key.id)) return false;
 
-  // Automatic chat is deliberately mention-only. Never infer a tag from plain
-  // text: WhatsApp's `mentionedJid` metadata is required to avoid accidental
-  // replies to ordinary group or direct messages.
-  if (!wasBotMentioned(message, sock, botConfig)) return false;
+  // Automatic chat only responds to an explicit bot tag or a direct reply to
+  // one of the bot's messages. Never infer either signal from plain text.
+  if (!wasBotMentioned(message, sock, botConfig) && !wasBotRepliedTo(message, sock, botConfig)) return false;
 
   // Free-chat is an explicit owner-controlled opt-in. When enabled, it is
   // intentionally independent of the general bot command mode so anyone can
@@ -294,6 +325,13 @@ const assistantCommands = {
 };
 
 assistantCommands.handleFreeChat = handleFreeChat;
-assistantCommands._internals = { getHistory, setHistory, clearHistoryFor, parseSpeechRequest, wasBotMentioned };
+assistantCommands._internals = {
+  getHistory,
+  setHistory,
+  clearHistoryFor,
+  parseSpeechRequest,
+  wasBotMentioned,
+  wasBotRepliedTo,
+};
 
 module.exports = assistantCommands;

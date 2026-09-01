@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const Module = require('module');
 const db = require('../lib/database');
+const { remember: rememberBotMessage } = require('../lib/bot-messages');
 
 const databasePath = path.join(__dirname, '..', 'data', 'database.json');
 const originalDatabase = fs.readFileSync(databasePath, 'utf8');
@@ -119,6 +120,58 @@ function makeSock() {
     });
     assert.strictEqual(visitorGroupHandled, true, 'enabled group free-chat should reply to non-owner group members');
     assert.strictEqual(visitorGroupSock.sent.at(-1).content.text, 'Stubbed assistant response');
+
+    const repliedSock = makeSock();
+    const repliedHandled = await assistant.handleFreeChat({
+      text: 'follow-up without tagging',
+      sock: repliedSock,
+      jid: '123456789@g.us',
+      sender: '2222222222222@s.whatsapp.net',
+      botConfig,
+      isGroup: true,
+      message: {
+        key: { fromMe: false, remoteJid: '123456789@g.us', participant: '2222222222222@s.whatsapp.net', id: 'reply-to-bot' },
+        message: {
+          extendedTextMessage: {
+            contextInfo: {
+              stanzaId: 'bot-group-answer',
+              participant: ownerJid,
+              quotedMessage: { conversation: 'Stubbed assistant response' },
+              mentionedJid: [],
+            },
+          },
+        },
+      },
+    });
+    assert.strictEqual(repliedHandled, true, 'a direct reply to a bot message should trigger enabled group free-chat');
+    assert.strictEqual(repliedSock.sent.at(-1).content.text, 'Stubbed assistant response');
+
+    // WhatsApp can omit contextInfo.participant for a quoted bot message in a
+    // direct chat; the sent-message registry must still make that reply work.
+    rememberBotMessage('bot-direct-answer');
+    const registryReplySock = makeSock();
+    const registryReplyHandled = await assistant.handleFreeChat({
+      text: 'reply to the bot in a DM',
+      sock: registryReplySock,
+      jid: '2222222222222@s.whatsapp.net',
+      sender: '2222222222222@s.whatsapp.net',
+      botConfig,
+      isGroup: false,
+      message: {
+        key: { fromMe: false, remoteJid: '2222222222222@s.whatsapp.net', id: 'registry-reply' },
+        message: {
+          extendedTextMessage: {
+            contextInfo: {
+              stanzaId: 'bot-direct-answer',
+              quotedMessage: { conversation: 'Stubbed assistant response' },
+              mentionedJid: [],
+            },
+          },
+        },
+      },
+    });
+    assert.strictEqual(registryReplyHandled, true, 'a registry-matched DM reply should trigger enabled free-chat');
+    assert.strictEqual(registryReplySock.sent.at(-1).content.text, 'Stubbed assistant response');
 
     const untaggedSock = makeSock();
     const untaggedHandled = await assistant.handleFreeChat({
