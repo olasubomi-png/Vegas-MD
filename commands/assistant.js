@@ -92,20 +92,10 @@ function wasBotMentioned(message, sock, botConfig) {
     .some(mentionedJid => botNumbers.has(digitsFromJid(mentionedJid)));
 }
 
-function wasBotRepliedTo(message, sock, botConfig) {
-  const botNumbers = knownBotNumbers(sock, botConfig);
-  return mentionContexts(message).some(context => {
-    const stanzaId = context?.stanzaId || context?.quotedMessage?.key?.id;
-    const quotedParticipant = context?.participant || context?.quotedMessage?.key?.participant;
-
-    // The short-lived registry catches bot messages whose quoted participant is
-    // omitted by WhatsApp, while the participant check continues to work after
-    // a restart when the original bot message is no longer in memory.
-    return Boolean(
-      (stanzaId && isBotGenerated(stanzaId)) ||
-      (quotedParticipant && botNumbers.has(digitsFromJid(quotedParticipant)))
-    );
-  });
+function wasExplicitlyRepliedTo(message) {
+  return mentionContexts(message).some(context =>
+    Boolean(context?.quotedMessage || context?.stanzaId)
+  );
 }
 
 function getHistory(key) {
@@ -230,9 +220,11 @@ async function handleFreeChat({ text, sock, jid, sender, botConfig, isGroup, mes
   if (!enabled || !text) return false;
   if (message?.key?.fromMe === true && isBotGenerated(message.key.id)) return false;
 
-  // Automatic chat only responds to an explicit bot tag or a direct reply to
-  // one of the bot's messages. Never infer either signal from plain text.
-  if (!wasBotMentioned(message, sock, botConfig) && !wasBotRepliedTo(message, sock, botConfig)) return false;
+  // Automatic chat only responds to an explicit bot tag or an explicit
+  // WhatsApp reply/quote. The quoted message may belong to the bot, the owner,
+  // or another participant; this also supports replies to owner-typed commands.
+  // Never infer either signal from plain text.
+  if (!wasBotMentioned(message, sock, botConfig) && !wasExplicitlyRepliedTo(message)) return false;
 
   // Free-chat is an explicit owner-controlled opt-in. When enabled, it is
   // intentionally independent of the general bot command mode so anyone can
@@ -331,7 +323,10 @@ assistantCommands._internals = {
   clearHistoryFor,
   parseSpeechRequest,
   wasBotMentioned,
-  wasBotRepliedTo,
+  wasExplicitlyRepliedTo,
+  // Backward-compatible internal name for integrations that imported it while
+  // reply matching was restricted to bot-authored messages.
+  wasBotRepliedTo: wasExplicitlyRepliedTo,
 };
 
 module.exports = assistantCommands;

@@ -146,6 +146,32 @@ function makeSock() {
     assert.strictEqual(repliedHandled, true, 'a direct reply to a bot message should trigger enabled group free-chat');
     assert.strictEqual(repliedSock.sent.at(-1).content.text, 'Stubbed assistant response');
 
+    // Screenshot-shaped case: the owner’s own `.freechat on` message is quoted.
+    // This must work even though the quoted message was not sent by the bot.
+    const ownerCommandReplySock = makeSock();
+    const ownerCommandReplyHandled = await assistant.handleFreeChat({
+      text: 'Hafqa',
+      sock: ownerCommandReplySock,
+      jid: '123456789@g.us',
+      sender: '2222222222222@s.whatsapp.net',
+      botConfig,
+      isGroup: true,
+      message: {
+        key: { fromMe: true, remoteJid: '123456789@g.us', participant: ownerJid, id: 'owner-command-reply' },
+        message: {
+          extendedTextMessage: {
+            contextInfo: {
+              stanzaId: 'owner-freechat-command',
+              quotedMessage: { conversation: '.freechat on' },
+              mentionedJid: [],
+            },
+          },
+        },
+      },
+    });
+    assert.strictEqual(ownerCommandReplyHandled, true, 'a reply to the owner’s own command should trigger free-chat');
+    assert.strictEqual(ownerCommandReplySock.sent.at(-1).content.text, 'Stubbed assistant response');
+
     // WhatsApp can omit contextInfo.participant for a quoted bot message in a
     // direct chat; the sent-message registry must still make that reply work.
     rememberBotMessage('bot-direct-answer');

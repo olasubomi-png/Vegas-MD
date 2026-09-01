@@ -32,3 +32,7 @@
 
 - [x] Allow enabled free-chat to reply when a user directly replies to a bot message, while keeping unrelated untagged messages silent.
 - [x] Add reply-to-bot routing regression coverage, validate the full suite, and publish the correction to GitHub main.
+
+- [x] Diagnose the reported failure where a WhatsApp reply to the bot’s message still receives no free-chat response.
+- [x] Correct the live reply/group-routing issue, add an exact regression, validate, and publish the fix.
+- [x] Treat any explicit WhatsApp reply/quote as a free-chat trigger, including replies to the owner’s own command or bot-account messages.
