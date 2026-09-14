@@ -328,81 +328,113 @@ const searchCommands = {
     }
   },
 
-  // ── Song lyrics (api.lyrics.ovh — verified working) ──
-  // Previous implementation used lyrist.vercel.app which is blocked
-  // by Vercel's security checkpoint returning HTML instead of JSON.
+  // ── Song lyrics (lrclib primary, lyrics.ovh fallback) ──
   lyrics: {
-    category: 'search', desc: 'Find song lyrics',
-    usage: '.lyrics <artist> - <song>', aliases: [], permissions: 'all',
+    category: 'search', reaction: '📝', desc: 'Find song lyrics',
+    usage: '.lyrics <song or artist - song>',
+    aliases: ['lyric', 'ly'],
+    permissions: 'all',
     examples: [
+      '.lyrics Blinding Lights',
       '.lyrics Eminem - Lose Yourself',
-      '.lyrics The Weeknd - Blinding Lights',
-      '.lyrics Ed Sheeran - Shape of You'
+      '.lyrics The Weeknd - Blinding Lights'
     ],
     exec: async (args, sock, jid) => {
       const input = args.join(' ').trim();
       if (!input) {
         return sock.sendMessage(jid, {
-          text: '❌ Usage: .lyrics <artist> - <song>\n\nExample: .lyrics Eminem - Lose Yourself'
+          text:
+            '❌ Usage: *.lyrics <song name>*\n' +
+            'Or: *.lyrics Artist - Song*\n\n' +
+            'Example: .lyrics Lose Yourself'
         });
       }
 
-      // Parse "Artist - Song" or fall back to treating whole input as song name
-      let artist = '', title = input;
+      let artist = '';
+      let title = input;
       if (input.includes(' - ')) {
-        [artist, ...rest] = input.split(' - ');
-        title = rest.join(' - ').trim();
-        artist = artist.trim();
+        const parts = input.split(' - ');
+        artist = parts.shift().trim();
+        title = parts.join(' - ').trim();
       }
 
-      await sock.sendMessage(jid, { text: `🎵 Searching lyrics for: _"${input}"_...` });
+      await sock.sendMessage(jid, { text: `📝 Searching lyrics for: _"${input}"_...` });
 
       try {
-        // api.lyrics.ovh requires artist + title separately
-        const encArtist = encodeURIComponent(artist || title);
-        const encTitle  = encodeURIComponent(artist ? title : '');
+        let lyricsText = null;
+        let meta = { artist, title };
 
-        let data, tried = false;
+        // 1) lrclib.net search (works with song name only)
+        try {
+          const { data: hits } = await axios.get('https://lrclib.net/api/search', {
+            params: { q: input },
+            timeout: 15000,
+            headers: { 'User-Agent': 'Vegas-MD/3.0' }
+          });
+          const list = Array.isArray(hits) ? hits : [];
+          const best = list.find(h => (h.plainLyrics || h.syncedLyrics)) || list[0];
+          if (best) {
+            meta = {
+              artist: best.artistName || artist,
+              title: best.trackName || title
+            };
+            if (best.plainLyrics) {
+              lyricsText = best.plainLyrics;
+            } else if (best.syncedLyrics) {
+              // strip [mm:ss.xx] tags
+              lyricsText = String(best.syncedLyrics)
+                .replace(/\[\d{1,2}:\d{2}(?:\.\d+)?\]/g, '')
+                .replace(/\n{3,}/g, '\n\n')
+                .trim();
+            } else if (best.id) {
+              const { data: full } = await axios.get(`https://lrclib.net/api/get/${best.id}`, {
+                timeout: 15000,
+                headers: { 'User-Agent': 'Vegas-MD/3.0' }
+              });
+              lyricsText = full?.plainLyrics || null;
+            }
+          }
+        } catch (e) {
+          console.warn('[lyrics] lrclib failed:', e.message);
+        }
 
-        // Attempt 1: artist + title (exact)
-        if (artist) {
+        // 2) lyrics.ovh when we have artist + title
+        if (!lyricsText && artist && title) {
           try {
-            const res = await axios.get(
-              `https://api.lyrics.ovh/v1/${encArtist}/${encTitle}`,
+            const { data } = await axios.get(
+              `https://api.lyrics.ovh/v1/${encodeURIComponent(artist)}/${encodeURIComponent(title)}`,
               { timeout: 15000 }
             );
-            data = res.data;
-          } catch { /* fall through */ }
+            if (data?.lyrics) lyricsText = data.lyrics;
+          } catch (e) {
+            console.warn('[lyrics] lyrics.ovh failed:', e.message);
+          }
         }
 
-        // Attempt 2: search endpoint (whole query as artist field)
-        if (!data?.lyrics && !tried) {
-          tried = true;
-          const res = await axios.get(
-            `https://api.lyrics.ovh/v1/${encodeURIComponent(input)}/${encodeURIComponent('')}`,
-            { timeout: 15000 }
-          ).catch(() => null);
-          if (res?.data?.lyrics) data = res.data;
-        }
-
-        if (!data?.lyrics) {
+        if (!lyricsText) {
           return sock.sendMessage(jid, {
             text:
               `❌ Lyrics not found for *${input}*.\n\n` +
-              `💡 Try the format: *.lyrics Artist - Song Title*\n` +
-              `Or search on: https://genius.com/search?q=${encodeURIComponent(input)}`
+              `💡 Try: *.lyrics Artist - Song Title*\n` +
+              `Or: https://genius.com/search?q=${encodeURIComponent(input)}`
           });
         }
 
-        const snippet = data.lyrics.slice(0, 1500);
-        const truncated = data.lyrics.length > 1500;
-
-        await sock.sendMessage(jid, {
-          text:
-            `🎵 *Lyrics*\n\n` +
-            `${snippet}` +
-            `${truncated ? '\n\n_... (lyrics truncated — too long to display in full)_' : ''}`
-        });
+        const header = `📝 *${meta.title || title}*${meta.artist ? `\n👤 ${meta.artist}` : ''}\n\n`;
+        const body = String(lyricsText).trim();
+        // WhatsApp text limit ~65k; keep safe margin and split if needed
+        const maxChunk = 3500;
+        if (header.length + body.length <= maxChunk) {
+          await sock.sendMessage(jid, { text: header + body });
+        } else {
+          await sock.sendMessage(jid, { text: header + body.slice(0, maxChunk) + '\n\n_…continued_' });
+          let offset = maxChunk;
+          while (offset < body.length) {
+            const chunk = body.slice(offset, offset + maxChunk);
+            await sock.sendMessage(jid, { text: chunk + (offset + maxChunk < body.length ? '\n\n_…continued_' : '') });
+            offset += maxChunk;
+          }
+        }
       } catch (err) {
         await sock.sendMessage(jid, {
           text:

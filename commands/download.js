@@ -968,33 +968,95 @@ async function sendVideoFromUrl(sock, jid, videoUrl, caption) {
   await sock.sendMessage(jid, { video: buf, caption, mimetype: 'video/mp4' });
 }
 
+/** True when buffer looks like MPEG-1/2 Layer III (ID3 or frame sync). */
+function looksLikeMp3(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length < 3) return false;
+  if (buf[0] === 0x49 && buf[1] === 0x44 && buf[2] === 0x33) return true; // ID3
+  if (buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0) return true; // frame sync
+  return false;
+}
+
+/**
+ * Re-encode arbitrary audio to WhatsApp-friendly MP3 (44100 Hz stereo 128k).
+ * Fixes "sent but cannot play" for webm/m4a/ogg mislabeled as audio/mpeg.
+ */
+async function ensurePlayableMp3(inputBufferOrPath) {
+  const inPath = typeof inputBufferOrPath === 'string'
+    ? inputBufferOrPath
+    : tmpFile('.bin');
+  const outPath = tmpFile('.mp3');
+  let wroteTemp = false;
+  try {
+    if (typeof inputBufferOrPath !== 'string') {
+      fs.writeFileSync(inPath, inputBufferOrPath);
+      wroteTemp = true;
+    }
+    // Skip re-encode only when source path is already .mp3 AND magic looks right
+    if (typeof inputBufferOrPath === 'string' && /\.mp3$/i.test(inputBufferOrPath)) {
+      const existing = fs.readFileSync(inputBufferOrPath);
+      if (looksLikeMp3(existing)) return existing;
+    }
+    await execFileAsync('ffmpeg', [
+      '-y', '-i', inPath,
+      '-vn',
+      '-acodec', 'libmp3lame',
+      '-ar', '44100',
+      '-ac', '2',
+      '-b:a', '128k',
+      outPath
+    ], { timeout: 120000 });
+    if (!fs.existsSync(outPath)) throw new Error('ffmpeg produced no mp3');
+    return fs.readFileSync(outPath);
+  } finally {
+    if (wroteTemp) try { fs.unlinkSync(inPath); } catch {}
+    try { if (fs.existsSync(outPath)) fs.unlinkSync(outPath); } catch {}
+  }
+}
+
+async function sendPlayableAudio(sock, jid, mp3Buffer, caption, fileName = 'song.mp3') {
+  if (!mp3Buffer || !mp3Buffer.length) throw new Error('Empty audio buffer');
+  // Primary: native WhatsApp audio message (playable in-chat)
+  await sock.sendMessage(jid, {
+    audio: mp3Buffer,
+    mimetype: 'audio/mpeg',
+    ptt: false,
+    fileName
+  });
+  if (caption) await sock.sendMessage(jid, { text: caption });
+}
+
 async function sendAudioFromUrl(sock, jid, audioUrl, caption) {
   if (!audioUrl || typeof audioUrl !== 'string') throw new Error('Music provider returned an empty audio URL');
 
-  // Download first so Baileys does not have to follow a provider redirect or
-  // signed CDN URL itself. Keep a direct-URL fallback for providers that reject
-  // server-side buffering but still allow WhatsApp to fetch the media.
+  // Download + re-encode to real MP3 so phones can always play it
   try {
     const media = await downloadMedia(audioUrl, {
       maxBytes: MAX_AUDIO_BYTES,
       timeout: 120_000,
     });
-    await sock.sendMessage(jid, {
-      audio: media.buffer,
-      mimetype: media.contentType || 'audio/mpeg',
-      ptt: false,
-    });
+    let mp3Buf = media.buffer;
+    if (!looksLikeMp3(mp3Buf) || !/mpeg|mp3/i.test(media.contentType || '')) {
+      console.log('[music] re-encoding audio to playable MP3…');
+      mp3Buf = await ensurePlayableMp3(mp3Buf);
+    }
+    await sendPlayableAudio(sock, jid, mp3Buf, caption);
   } catch (downloadError) {
-    console.warn(`[music] buffered audio download failed: ${downloadError.message}; trying direct media URL`);
+    console.warn(`[music] buffered/recode failed: ${downloadError.message}; trying direct media URL`);
+    // Last resort: direct URL (may still fail to play on some devices)
     await sock.sendMessage(jid, { audio: { url: audioUrl }, mimetype: 'audio/mpeg', ptt: false });
+    if (caption) await sock.sendMessage(jid, { text: caption });
   }
-  if (caption) await sock.sendMessage(jid, { text: caption });
 }
 
 async function sendAudioFromFile(sock, jid, filePath, caption) {
-  const buf = fs.readFileSync(filePath);
-  await sock.sendMessage(jid, { audio: buf, mimetype: 'audio/mpeg', ptt: false });
-  if (caption) await sock.sendMessage(jid, { text: caption });
+  let mp3Buf;
+  try {
+    mp3Buf = await ensurePlayableMp3(filePath);
+  } catch (e) {
+    console.warn(`[music] ensurePlayableMp3 failed: ${e.message}; sending raw file`);
+    mp3Buf = fs.readFileSync(filePath);
+  }
+  await sendPlayableAudio(sock, jid, mp3Buf, caption);
 }
 
 async function sendVideoFromFile(sock, jid, filePath, caption) {
@@ -1028,8 +1090,10 @@ async function sendProviderMedia(sock, jid, media, caption) {
   }
 }
 
-async function sendDavidCyrilMusicFallback(query, sock, jid) {
+/** David Cyril song/play API — primary music provider for .play / .song */
+async function sendDavidCyrilMusic(query, sock, jid) {
   const errors = [];
+  // Prefer /play then /song on apis.davidcyril.name.ng
   for (const endpoint of ['play', 'song']) {
     try {
       const music = await fetchMusic(query, endpoint);
@@ -1046,7 +1110,12 @@ async function sendDavidCyrilMusicFallback(query, sock, jid) {
       errors.push(`${endpoint}: ${error.message}`);
     }
   }
-  throw new Error(`David Cyril music fallback failed (${errors.join('; ')})`);
+  throw new Error(`David Cyril music failed (${errors.join('; ')})`);
+}
+
+// Back-compat alias
+async function sendDavidCyrilMusicFallback(query, sock, jid) {
+  return sendDavidCyrilMusic(query, sock, jid);
 }
 
 // ── Commands ───────────────────────────────────────────────────────────────
@@ -1264,7 +1333,7 @@ const downloadCommands = {
 
   // ── Song search (query → YouTube audio) ─────────────────
   song: {
-    category: 'downloader', reaction: '🎵', desc: 'Search and download a song by name',
+    category: 'downloader', reaction: '🎵', desc: 'Search and download a song by name (David Cyril)',
     usage: '.song <song name>', aliases: [], permissions: 'all',
     examples: ['.song Blinding Lights', '.song Bohemian Rhapsody'],
     exec: async (args, sock, jid) => {
@@ -1272,9 +1341,21 @@ const downloadCommands = {
       if (!q) return sock.sendMessage(jid, { text: `❌ Usage: .song <song name>` });
       await sock.sendMessage(jid, { text: `🎵 Searching: _"${q}"_...` });
 
+      // Primary: David Cyril song/play API
+      try {
+        await sendDavidCyrilMusic(q, sock, jid);
+        return;
+      } catch (cyrilError) {
+        console.warn(`[song] Cyril primary failed: ${cyrilError.message}`);
+        await sock.sendMessage(jid, {
+          text: '↪️ Cyril music failed. Trying YouTube fallback...'
+        });
+      }
+
+      // Fallback: YouTube (yt-dlp / cobalt)
       try {
         const video = await searchYouTube(q);
-        const ytUrl   = `https://youtu.be/${video.videoId}`;
+        const ytUrl = `https://youtu.be/${video.videoId}`;
         const caption = `🎵 *${video.title}*\n👤 ${video.author}\n⏱️ ${Math.floor(video.lengthSeconds / 60)}:${String(video.lengthSeconds % 60).padStart(2, '0')}`;
         await sock.sendMessage(jid, { text: `${caption}\n\n⏳ Downloading...` });
 
@@ -1290,23 +1371,15 @@ const downloadCommands = {
           const dlUrl = await cobaltFetch(ytUrl, 'audio', 'mp3');
           await sendAudioFromUrl(sock, jid, dlUrl, caption);
         }
-        return;
-      } catch (primaryError) {
-        console.warn(`[song] primary provider failed: ${primaryError.message}`);
-      }
-
-      try {
-        await sock.sendMessage(jid, { text: '↪️ The primary music provider failed. Trying the David Cyril music fallback...' });
-        await sendDavidCyrilMusicFallback(q, sock, jid);
       } catch (fallbackError) {
-        console.error(`[song] fallback failed: ${fallbackError.message}`);
+        console.error(`[song] all providers failed: ${fallbackError.message}`);
         await sock.sendMessage(jid, { text: `❌ Song download failed: ${fallbackError.message}` });
       }
     }
   },
 
   play: {
-    category: 'downloader', reaction: '🎵', desc: 'Search YouTube and play music',
+    category: 'downloader', reaction: '🎵', desc: 'Search and play music (David Cyril default)',
     usage: '.play <song name>', aliases: [], permissions: 'all',
     examples: ['.play Shape of You', '.play Despacito'],
     exec: async (args, sock, jid) => downloadCommands.song.exec(args, sock, jid)

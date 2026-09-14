@@ -322,6 +322,106 @@ const converterCommands = {
         ptt:      true,  // sends as voice note
       });
     }
+  },
+
+  // ── Audio / voice → text (speech-to-text) ────────────────
+  totext: {
+    category: 'converter',
+    reaction: '🗣️',
+    desc: 'Transcribe audio or voice note to text (reply to audio)',
+    usage: '.totext',
+    aliases: ['transcribe', 'stt', 'speechtotext'],
+    permissions: 'all',
+    examples: ['.totext (reply to a voice note or audio)'],
+    exec: async (args, sock, jid, isGroup, sender, message) => {
+      const ctx = getCtx(message);
+      const quoted = ctx?.quotedMessage;
+      const media =
+        quoted?.audioMessage ||
+        quoted?.videoMessage ||
+        quoted?.documentMessage ||
+        null;
+
+      if (!media) {
+        return sock.sendMessage(jid, {
+          text:
+            '🗣️ *Audio → Text*\n\n' +
+            'Reply to a *voice note*, *audio*, or *video* with *.totext*\n' +
+            'Aliases: `.transcribe` `.stt`'
+        });
+      }
+
+      const apiKey = process.env.OPENAI_API_KEY;
+      if (!apiKey) {
+        return sock.sendMessage(jid, {
+          text:
+            '❌ Speech-to-text needs *OPENAI_API_KEY* in `.env`.\n' +
+            'Add your OpenAI key, then restart the bot.'
+        });
+      }
+
+      await sock.sendMessage(jid, { text: '🗣️ Transcribing audio…' });
+
+      const inFile = tmpFile('.ogg');
+      const wavFile = tmpFile('.wav');
+      try {
+        const buf = await dlQuoted(sock, jid, message, quoted);
+        if (!buf || !buf.length) throw new Error('Could not download the audio');
+        fs.writeFileSync(inFile, buf);
+
+        // Normalize to wav for better Whisper compatibility
+        try {
+          await ffmpegRun(inFile, wavFile, ['-vn', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1']);
+        } catch {
+          // If ffmpeg fails, try original file as-is
+          fs.copyFileSync(inFile, wavFile);
+        }
+
+        const OpenAI = require('openai');
+        const client = new OpenAI({
+          apiKey,
+          baseURL: process.env.OPENAI_BASE_URL || undefined
+        });
+
+        const transcription = await client.audio.transcriptions.create({
+          file: fs.createReadStream(wavFile),
+          model: process.env.OPENAI_STT_MODEL || 'whisper-1',
+          response_format: 'text'
+        });
+
+        const text = String(transcription?.text || transcription || '').trim();
+        if (!text) {
+          return sock.sendMessage(jid, { text: '❌ No speech detected in that audio.' });
+        }
+
+        // Split long transcripts
+        const maxChunk = 3500;
+        if (text.length <= maxChunk) {
+          await sock.sendMessage(jid, {
+            text: `🗣️ *Transcription*\n\n${text}`
+          });
+        } else {
+          await sock.sendMessage(jid, {
+            text: `🗣️ *Transcription*\n\n${text.slice(0, maxChunk)}\n\n_…continued_`
+          });
+          for (let i = maxChunk; i < text.length; i += maxChunk) {
+            await sock.sendMessage(jid, {
+              text: text.slice(i, i + maxChunk) + (i + maxChunk < text.length ? '\n\n_…continued_' : '')
+            });
+          }
+        }
+      } catch (err) {
+        const safe = String(err.message || err).slice(0, 200);
+        console.error('[totext] failed:', safe);
+        await sock.sendMessage(jid, {
+          text: `❌ Transcription failed: ${safe}`
+        });
+      } finally {
+        for (const f of [inFile, wavFile]) {
+          try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch {}
+        }
+      }
+    }
   }
 };
 
