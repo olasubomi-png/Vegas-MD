@@ -57,27 +57,27 @@ function permLabel(p) {
   return 'User';
 }
 
-// ── Category display metadata (anime-styled labels) ───────
+// ── Category display metadata (high-energy labels) ────────
 const CATEGORY_META = {
-  moderation: { label: '🛡️  Admin',        emoji: '🛡️' },
-  ai:         { label: '🤖  AI Magic',     emoji: '🤖' },
-  audio:      { label: '🎧  Audio FX',     emoji: '🎧' },
-  downloader: { label: '⬇️  Download',     emoji: '⬇️' },
-  fun:        { label: '✨  Fun Zone',     emoji: '✨' },
-  games:      { label: '🎮  Games',        emoji: '🎮' },
-  group:      { label: '👥  Group',        emoji: '👥' },
-  general:    { label: '🏠  Home',         emoji: '🏠' },
-  economy:    { label: '💰  Economy',      emoji: '💰' },
-  owner:      { label: '👑  Owner',        emoji: '👑' },
-  search:     { label: '🔍  Search',       emoji: '🔍' },
-  converter:  { label: '🔄  Converter',    emoji: '🔄' },
-  sticker:    { label: '🎨  Tools',        emoji: '🎨' },
-  utility:    { label: '⚙️  Utility',      emoji: '⚙️' },
-  movies:     { label: '🎬  Movies',       emoji: '🎬' },
-  anime:      { label: '🌸  Anime',        emoji: '🌸' },
-  sports:     { label: '⚽  Sports',       emoji: '⚽' },
-  religion:   { label: '📖  Religion',     emoji: '📖' },
-  canvas:     { label: '🖼️  Canvas',       emoji: '🖼️' },
+  moderation: { label: 'ADMIN',      icon: '🛡️' },
+  ai:         { label: 'AI POWER',   icon: '⚡' },
+  audio:      { label: 'AUDIO LAB',  icon: '🔊' },
+  downloader: { label: 'DOWNLOAD',   icon: '🚀' },
+  fun:        { label: 'FUN ZONE',   icon: '🔥' },
+  games:      { label: 'GAMES',      icon: '🎯' },
+  group:      { label: 'GROUP',      icon: '👥' },
+  general:    { label: 'GENERAL',    icon: '🏠' },
+  economy:    { label: 'ECONOMY',    icon: '💎' },
+  owner:      { label: 'OWNER',      icon: '👑' },
+  search:     { label: 'SEARCH',     icon: '🔎' },
+  converter:  { label: 'CONVERT',    icon: '♻️' },
+  sticker:    { label: 'TOOLS',      icon: '🛠️' },
+  utility:    { label: 'UTILITY',    icon: '⚙️' },
+  movies:     { label: 'MOVIES',     icon: '🎬' },
+  anime:      { label: 'ANIME',      icon: '🎌' },
+  sports:     { label: 'SPORTS',     icon: '⚽' },
+  religion:   { label: 'RELIGION',   icon: '📿' },
+  canvas:     { label: 'CANVAS',     icon: '🎨' },
 };
 
 // ─────────────────────────────────────────────────────────
@@ -92,8 +92,9 @@ function buildMainMenu(cfg, allCmds, catReg, catOrder, { isOwner = false } = {})
   const uptime  = getUptime();
 
   const visibleName = (name) => {
+    if (!name || typeof name !== 'string' || !name.trim()) return false;
     const cmd = allCmds?.[name];
-    if (!cmd) return false;
+    if (!cmd || typeof cmd.exec !== 'function') return false;
     const perm = String(cmd.permissions || 'all').toLowerCase();
     if (perm === 'owner' && !isOwner) return false;
     return true;
@@ -102,47 +103,49 @@ function buildMainMenu(cfg, allCmds, catReg, catOrder, { isOwner = false } = {})
   const order = catOrder || Object.keys(catReg);
   let visibleCount = 0;
   let body = '';
+  let catIndex = 0;
 
   for (const cat of order) {
     if (cat === 'owner' && !isOwner) continue;
     const cmds = [...new Set(catReg[cat] || [])].filter(visibleName).sort();
     if (!cmds.length) continue;
     visibleCount += cmds.length;
+    catIndex += 1;
 
-    const meta = CATEGORY_META[cat] || { label: cat.charAt(0).toUpperCase() + cat.slice(1) };
-    body += `\n*╭─❖ ${meta.label} ❖─╮*\n`;
-    const row = [];
+    const meta = CATEGORY_META[cat] || {
+      label: String(cat).toUpperCase(),
+      icon: '⭐'
+    };
+    const icon = meta.icon || '⭐';
+
+    body += `\n*╔═ ${icon} ${meta.label} ═╗*\n`;
     for (const name of cmds) {
-      row.push(`*${prefix}${name}*`);
-      if (row.length === 2) {
-        body += `│ 🌸 ${row[0]}  ·  ${row[1]}\n`;
-        row.length = 0;
-      }
+      body += `*║*  ⚡ *${prefix}${name}*\n`;
     }
-    if (row.length === 1) body += `│ 🌸 ${row[0]}\n`;
-    body += `*╰───────────────╯*\n`;
+    body += `*╚════════════╝*\n`;
   }
 
   let out =
-    `*✧･ﾟ: *✧･ﾟ:* 　🌸　*:･ﾟ✧*:･ﾟ✧*\n` +
-    `*┏━『 ${botName} 』━┓*\n` +
-    `*┃*  🎀  *Anime Bot Menu*\n` +
-    `*┃*\n` +
-    `*┃*  👤 *Owner*    › ${owner}\n` +
-    `*┃*  📚 *Commands* › ${visibleCount}\n` +
-    `*┃*  ⏱️ *Runtime*  › ${uptime}\n` +
-    `*┃*  🔖 *Prefix*   › ${prefix}\n` +
-    `*┃*  🌙 *Mode*     › ${modeCap}\n` +
-    `*┃*  ✨ *Version*  › v${PKG_VERSION}\n` +
-    `*┗━━━━━━━━━━━━━━┛*\n` +
-    `\n*˚₊· ͟͟͞͞➳❥ Pick a spell below~*\n`;
+    `*⚡━━━━━━━━━━━━━━━━⚡*\n` +
+    `*   🔥 ${botName} 🔥*\n` +
+    `*   FULL POWER MENU*\n` +
+    `*⚡━━━━━━━━━━━━━━━━⚡*\n` +
+    `\n` +
+    `👤 Owner     » *${owner}*\n` +
+    `📦 Commands  » *${visibleCount}*\n` +
+    `⏱️ Runtime   » *${uptime}*\n` +
+    `🔖 Prefix    » *${prefix}*\n` +
+    `🌐 Mode      » *${modeCap}*\n` +
+    `🚀 Version   » *v${PKG_VERSION}*\n` +
+    `\n` +
+    `*💥 TAP A COMMAND & GO 💥*\n`;
 
   out += body;
   out +=
-    `\n*✧･ﾟ: *✧･ﾟ:* 　💖　*:･ﾟ✧*:･ﾟ✧*\n` +
-    `_Type *${prefix}menu <category>* for details_\n` +
-    `_Example: *${prefix}menu anime* · *${prefix}menu ai*_\n` +
-    `> *© powered by ${botName}  ✧  made with 🌸*`;
+    `\n*⚡━━━━━━━━━━━━━━━━⚡*\n` +
+    `🔎 *${prefix}menu ai*  ·  *${prefix}menu anime*\n` +
+    `📖 *${prefix}help play* for details\n` +
+    `*⚡ ${botName} · STAY POWERED ⚡*`;
   return out;
 }
 
@@ -166,27 +169,25 @@ function buildCategoryMenu(catKey, cfg, allCmds, catReg, { isOwner = false } = {
   if (!cmds.length) return null;
 
   let out =
-    `*✧ 🌸 ${meta.label} 🌸 ✧*\n` +
-    `*┏━━━━━━━━━━━━━━┓*\n\n`;
+    `*⚡━━ ${meta.icon || '⭐'} ${meta.label} ━━⚡*\n\n`;
 
   for (let i = 0; i < cmds.length; i++) {
-    const name    = cmds[i];
-    const cmd     = allCmds[name];
-    const desc    = cmd?.desc    || 'No description available.';
-    const usage   = cmd?.usage   || `${prefix}${name}`;
-    const perm    = cmd?.permissions || 'all';
+    const name = cmds[i];
+    if (!name) continue;
+    const cmd  = allCmds[name];
+    const desc = cmd?.desc || 'No description available.';
+    const usage = cmd?.usage || `${prefix}${name}`;
+    const perm = cmd?.permissions || 'all';
 
     out +=
-      `*│ ✨ ${prefix}${name}*\n` +
-      `*│*   ↳ ${desc}\n` +
-      `*│*   📌 ${usage}\n` +
-      `*│*   🔒 ${permLabel(perm)}\n`;
-    if (i < cmds.length - 1) out += `*│*\n`;
+      `⚡ *${prefix}${name}*\n` +
+      `   ${desc}\n` +
+      `   📌 ${usage} · 🔒 ${permLabel(perm)}\n\n`;
   }
 
   out +=
-    `\n*┗━━━━━━━━━━━━━━┛*\n` +
-    `_Type *${prefix}help <command>* for the full scroll~_`;
+    `*⚡━━━━━━━━━━━━⚡*\n` +
+    `_Use *${prefix}help <command>* for full info_`;
 
   return out;
 }
