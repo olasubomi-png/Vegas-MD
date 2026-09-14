@@ -76,43 +76,52 @@ const CATEGORY_META = {
 // ─────────────────────────────────────────────────────────
 // MAIN MENU  (.menu)
 // ─────────────────────────────────────────────────────────
-function buildMainMenu(cfg, allCmds, catReg, catOrder) {
+function buildMainMenu(cfg, allCmds, catReg, catOrder, { isOwner = false } = {}) {
   const prefix  = cfg?.prefix    || '.';
   const botName = cfg?.name      || 'OLASUBOMI-MD';
   const owner   = cfg?.ownerName || 'Olasubomi';
   const mode    = cfg?.mode      || 'private';
   const modeCap = mode.charAt(0).toUpperCase() + mode.slice(1);
-  const total   = allCmds ? Object.keys(allCmds).length : 0;
   const uptime  = getUptime();
 
-  // ── Header ───────────────────────────────────────────────
+  const visibleName = (name) => {
+    const cmd = allCmds?.[name];
+    if (!cmd) return false;
+    const perm = String(cmd.permissions || 'all').toLowerCase();
+    if (perm === 'owner' && !isOwner) return false;
+    return true;
+  };
+
+  const order = catOrder || Object.keys(catReg);
+  let visibleCount = 0;
+  let body = '';
+
+  for (const cat of order) {
+    if (cat === 'owner' && !isOwner) continue;
+    const cmds = [...new Set(catReg[cat] || [])].filter(visibleName).sort();
+    if (!cmds.length) continue;
+    visibleCount += cmds.length;
+
+    const meta = CATEGORY_META[cat] || { label: cat.charAt(0).toUpperCase() + cat.slice(1) };
+    body += `\n\`『 ${meta.label} 』\`\n`;
+    body += `╭───────────────────⊷\n`;
+    for (const name of cmds) {
+      body += `*┋ ▸ ${name}*\n`;
+    }
+    body += `╰───────────────────⊷\n`;
+  }
+
   let out =
     `*╭┈───〔 ${botName} 〕┈───⊷*\n` +
     `*├⬗ Owner:* ${owner}\n` +
-    `*├⬗ Commands:* ${total}\n` +
+    `*├⬗ Commands:* ${visibleCount}\n` +
     `*├⬗ Runtime:* ${uptime}\n` +
     `*├⬗ Prefix:* ${prefix}\n` +
     `*├⬗ Mode:* ${modeCap}\n` +
     `*├⬗ Version:* ${PKG_VERSION} Bᴇᴛᴀ\n` +
     `*╰───────────────────⊷*\n`;
 
-  // ── Category sections ────────────────────────────────────
-  const order = catOrder || Object.keys(catReg);
-  const cats  = order.filter(c => catReg[c]?.length);
-
-  for (const cat of cats) {
-    const cmds = [...new Set(catReg[cat])].sort();
-    if (!cmds.length) continue;
-
-    const meta  = CATEGORY_META[cat] || { label: cat.charAt(0).toUpperCase() + cat.slice(1) };
-    out += `\n\`『 ${meta.label} 』\`\n`;
-    out += `╭───────────────────⊷\n`;
-    for (const name of cmds) {
-      out += `*┋ ▸ ${name}*\n`;
-    }
-    out += `╰───────────────────⊷\n`;
-  }
-
+  out += body;
   out += `\n> *© ᴘᴏᴡᴇʀᴇᴅ ʙʏ ${botName}*`;
   return out;
 }
@@ -120,11 +129,20 @@ function buildMainMenu(cfg, allCmds, catReg, catOrder) {
 // ─────────────────────────────────────────────────────────
 // CATEGORY MENU  (.menu ai)
 // ─────────────────────────────────────────────────────────
-function buildCategoryMenu(catKey, cfg, allCmds, catReg) {
+function buildCategoryMenu(catKey, cfg, allCmds, catReg, { isOwner = false } = {}) {
   const meta   = CATEGORY_META[catKey];
   if (!meta) return null;
+  if (catKey === 'owner' && !isOwner) return null;
   const prefix = cfg?.prefix || '.';
-  const cmds   = [...new Set(catReg[catKey] || [])].sort();
+  const cmds   = [...new Set(catReg[catKey] || [])]
+    .filter((name) => {
+      const cmd = allCmds?.[name];
+      if (!cmd) return false;
+      const perm = String(cmd.permissions || 'all').toLowerCase();
+      if (perm === 'owner' && !isOwner) return false;
+      return true;
+    })
+    .sort();
   if (!cmds.length) return null;
 
   let out =
@@ -209,15 +227,18 @@ const mainCommands = {
       const cfg     = botConfig || global.botConfig;
       const prefix  = cfg?.prefix || '.';
       const catKey  = args[0]?.toLowerCase();
+      const isOwner = message?._isOwner === true;
 
       if (catKey) {
         if (!CATEGORY_META[catKey]) {
-          const available = Object.keys(CATEGORY_META).join(', ');
+          const available = Object.keys(CATEGORY_META)
+            .filter((k) => k !== 'owner' || isOwner)
+            .join(', ');
           return sock.sendMessage(jid, {
             text: `❌ Unknown category: *${catKey}*\n\nAvailable: ${available}`
           });
         }
-        const page = buildCategoryMenu(catKey, cfg, allCmds, catReg);
+        const page = buildCategoryMenu(catKey, cfg, allCmds, catReg, { isOwner });
         if (!page) {
           return sock.sendMessage(jid, {
             text: `⚠️ No commands in *${catKey}* yet.`
@@ -226,7 +247,7 @@ const mainCommands = {
         return sock.sendMessage(jid, { text: page });
       }
 
-      const text = buildMainMenu(cfg, allCmds, catReg, catOrder);
+      const text = buildMainMenu(cfg, allCmds, catReg, catOrder, { isOwner });
 
       // Send menu with the banner image if it exists, otherwise text-only
       if (fs.existsSync(MENU_IMAGE_PATH)) {

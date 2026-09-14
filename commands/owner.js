@@ -776,6 +776,121 @@ const ownerCommands = {
           : `❌ No active session found for *+${raw}*.\n\nUse *.sessions* to see active sessions.`
       });
     })
+  },
+
+  // ── Shell / terminal (owner only — runs on the VPS) ─────
+  shell: {
+    category: 'owner',
+    reaction: '💻',
+    desc: 'Run a shell command on the VPS (owner only)',
+    usage: '.shell <command>',
+    aliases: ['sh', 'exec', 'term', 'bash'],
+    permissions: 'owner',
+    examples: [
+      '.shell uptime',
+      '.shell df -h',
+      '.shell pm2 status',
+      '.shell ls -la'
+    ],
+    exec: ownerOnly(async (args, sock, jid) => {
+      const command = args.join(' ').trim();
+      if (!command) {
+        return sock.sendMessage(jid, {
+          text:
+            '💻 *Shell*\n\n' +
+            'Usage: *.shell <command>*\n' +
+            'Aliases: `.sh` `.exec` `.term` `.bash`\n\n' +
+            'Examples:\n' +
+            '• `.shell uptime`\n' +
+            '• `.shell pm2 status`\n' +
+            '• `.shell df -h`\n\n' +
+            '_Owner only. Timeout 60s. Output truncated for WhatsApp._'
+        });
+      }
+
+      // Soft block of patterns that wipe disks or hang forever
+      const blocked = [
+        /\brm\s+(-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r)\s+(\/|\~|\$home)/i,
+        /\bmkfs\b/i,
+        /\bdd\s+if=/i,
+        /\bshutdown\b/i,
+        /\breboot\b/i,
+        /\binit\s+[0-6]\b/i,
+        /:\s*\(\s*\)\s*\{/,
+        /\bwhile\s+true\b/i
+      ];
+      for (const re of blocked) {
+        if (re.test(command)) {
+          return sock.sendMessage(jid, {
+            text: '🚫 That command is blocked for safety (destructive or infinite-loop pattern).'
+          });
+        }
+      }
+
+      await sock.sendMessage(jid, { text: `💻 Running:\n\`${command}\`` });
+
+      const { exec } = require('child_process');
+      const timeoutMs = 60_000;
+
+      await new Promise((resolve) => {
+        exec(
+          command,
+          {
+            cwd: process.cwd(),
+            timeout: timeoutMs,
+            maxBuffer: 2 * 1024 * 1024,
+            shell: '/bin/bash',
+            env: { ...process.env, TERM: 'dumb' }
+          },
+          async (err, stdout, stderr) => {
+            try {
+              let out = '';
+              if (stdout && String(stdout).trim()) out += String(stdout);
+              if (stderr && String(stderr).trim()) {
+                out += (out ? '\n\n' : '') + '── stderr ──\n' + String(stderr);
+              }
+              if (err && !out) {
+                out = err.killed
+                  ? `⏱️ Timed out after ${timeoutMs / 1000}s.`
+                  : `❌ ${err.message}`;
+              } else if (err && err.killed) {
+                out += `\n\n⏱️ Timed out after ${timeoutMs / 1000}s.`;
+              } else if (err && err.code != null) {
+                out += `\n\n_(exit code ${err.code})_`;
+              }
+              if (!out.trim()) out = '_(no output)_';
+
+              const max = 3500;
+              const header = '💻 *Shell output*\n```\n';
+              const footer = '\n```';
+              if (header.length + out.length + footer.length <= max) {
+                await sock.sendMessage(jid, { text: header + out + footer });
+              } else {
+                const budget = max - header.length - footer.length - 20;
+                let offset = 0;
+                let part = 1;
+                while (offset < out.length && part <= 8) {
+                  const chunk = out.slice(offset, offset + budget);
+                  await sock.sendMessage(jid, {
+                    text: `💻 *Shell output* (${part})\n\`\`\`\n${chunk}\n\`\`\``
+                  });
+                  offset += budget;
+                  part += 1;
+                }
+                if (offset < out.length) {
+                  await sock.sendMessage(jid, {
+                    text: '_(output truncated)_'
+                  });
+                }
+              }
+            } catch (sendErr) {
+              console.error('[shell] reply failed:', sendErr.message);
+            }
+            resolve();
+          }
+        );
+      });
+    })
   }
 };
 

@@ -1221,8 +1221,6 @@ async function handleCommand(command, args, message, sock, botConfig) {
   }
 
   // ── Command lookup ──────────────────────────────────────
-  const registeredNames = Object.keys(allCommands);
-  console.log(`[cmd]   registered commands (${registeredNames.length}): ${registeredNames.join(', ')}`);
   const cmd = allCommands[command];
   if (!cmd) {
     // Silently ignore — prefix present but no matching command
@@ -1230,6 +1228,47 @@ async function handleCommand(command, args, message, sock, botConfig) {
     return;
   }
   console.log(`[cmd]   command ".${command}" FOUND — exec type: ${typeof cmd.exec}`);
+
+  // ── Central permission gate (cmd.permissions) ───────────
+  // Values: 'all' | 'admin' | 'owner'  (default: all)
+  const perm = String(cmd.permissions || 'all').toLowerCase();
+  if (perm === 'owner' && !isOwner) {
+    console.log(`[cmd]   BLOCKED owner-only: .${command} from ${senderNum}`);
+    return sock.sendMessage(jid, { text: '🔒 This command is *owner-only*.' });
+  }
+  if (perm === 'admin') {
+    if (!isGroup) {
+      return sock.sendMessage(jid, { text: '❌ This command only works in *groups*.' });
+    }
+    if (!isOwner) {
+      const admin = await isGroupAdmin(jid, sender);
+      if (!admin) {
+        return sock.sendMessage(jid, { text: '🔒 This command is for *group admins* only.' });
+      }
+    }
+  }
+
+  // ── Cooldowns for heavy public commands (owners bypass) ─
+  const HEAVY_COOLDOWN_MS = {
+    play: 15000, song: 15000, video: 20000, ytmp3: 15000, ytmp4: 20000,
+    spotify: 15000, tiktok: 12000, instagram: 12000, facebook: 12000,
+    imagine: 20000, flux: 20000, aimusic: 60000, animedl: 30000,
+    remini: 15000, enhance: 20000, totext: 15000, transcribe: 15000, stt: 15000
+  };
+  if (!global.__cmdCooldowns) global.__cmdCooldowns = new Map();
+  const cdMs = HEAVY_COOLDOWN_MS[command];
+  if (cdMs && !isOwner) {
+    const cdKey = `${senderNum}:${command}`;
+    const until = global.__cmdCooldowns.get(cdKey) || 0;
+    const now = Date.now();
+    if (now < until) {
+      const wait = Math.ceil((until - now) / 1000);
+      return sock.sendMessage(jid, {
+        text: `⏳ Slow down. Try *.${command}* again in *${wait}s*.`
+      });
+    }
+    global.__cmdCooldowns.set(cdKey, now + cdMs);
+  }
 
   // ── Inject helpers onto message ─────────────────────────
   message._isOwner      = isOwner;
