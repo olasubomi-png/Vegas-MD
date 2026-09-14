@@ -1,14 +1,22 @@
 'use strict';
-// commands/main.js — Premium menu UI  (architecture unchanged)
+// commands/main.js — Anime-styled menu UI
 const fs   = require('fs');
 const path = require('path');
 
-// Path to menu banner image
-// Prefer menu.png (Vegas-MD branded image); fall back to menu.jpg if absent
-const MENU_IMAGE_PNG  = path.join(__dirname, '..', 'assets', 'menu.png');
-const MENU_IMAGE_JPG  = path.join(__dirname, '..', 'assets', 'menu.jpg');
-const MENU_IMAGE_PATH = fs.existsSync(MENU_IMAGE_PNG) ? MENU_IMAGE_PNG : MENU_IMAGE_JPG;
-const db   = require('../lib/database');
+// Menu banner paths (custom owner image wins)
+const ASSETS_DIR        = path.join(__dirname, '..', 'assets');
+const MENU_IMAGE_CUSTOM = path.join(ASSETS_DIR, 'menu-custom.jpg');
+const MENU_IMAGE_PNG    = path.join(ASSETS_DIR, 'menu.png');
+const MENU_IMAGE_JPG    = path.join(ASSETS_DIR, 'menu.jpg');
+
+function resolveMenuImagePath() {
+  if (fs.existsSync(MENU_IMAGE_CUSTOM)) return MENU_IMAGE_CUSTOM;
+  if (fs.existsSync(MENU_IMAGE_PNG)) return MENU_IMAGE_PNG;
+  if (fs.existsSync(MENU_IMAGE_JPG)) return MENU_IMAGE_JPG;
+  return null;
+}
+
+const db = require('../lib/database');
 
 // ── Version from package.json ─────────────────────────────
 let PKG_VERSION = '3.0.0';
@@ -49,28 +57,27 @@ function permLabel(p) {
   return 'User';
 }
 
-// ── Category display metadata ─────────────────────────────
+// ── Category display metadata (anime-styled labels) ───────
 const CATEGORY_META = {
-  moderation: { label: 'Admin' },
-  ai:         { label: 'AI' },
-  audio:      { label: 'Audio' },
-  downloader: { label: 'Downloader' },
-  fun:        { label: 'Fun' },
-  games:      { label: 'Games' },
-  group:      { label: 'Group' },
-  general:    { label: 'General' },
-  economy:    { label: 'Economy' },
-  owner:      { label: 'Owner' },
-  search:     { label: 'Search' },
-  converter:  { label: 'Converter' },
-  sticker:    { label: 'Tools' },
-  utility:    { label: 'Utility' },
-  // ZST Labs powered categories
-  movies:     { label: 'Movies' },
-  anime:      { label: 'Anime' },
-  sports:     { label: 'Sports' },
-  religion:   { label: 'Religion' },
-  canvas:     { label: 'Canvas' },
+  moderation: { label: '🛡️  Admin',        emoji: '🛡️' },
+  ai:         { label: '🤖  AI Magic',     emoji: '🤖' },
+  audio:      { label: '🎧  Audio FX',     emoji: '🎧' },
+  downloader: { label: '⬇️  Download',     emoji: '⬇️' },
+  fun:        { label: '✨  Fun Zone',     emoji: '✨' },
+  games:      { label: '🎮  Games',        emoji: '🎮' },
+  group:      { label: '👥  Group',        emoji: '👥' },
+  general:    { label: '🏠  Home',         emoji: '🏠' },
+  economy:    { label: '💰  Economy',      emoji: '💰' },
+  owner:      { label: '👑  Owner',        emoji: '👑' },
+  search:     { label: '🔍  Search',       emoji: '🔍' },
+  converter:  { label: '🔄  Converter',    emoji: '🔄' },
+  sticker:    { label: '🎨  Tools',        emoji: '🎨' },
+  utility:    { label: '⚙️  Utility',      emoji: '⚙️' },
+  movies:     { label: '🎬  Movies',       emoji: '🎬' },
+  anime:      { label: '🌸  Anime',        emoji: '🌸' },
+  sports:     { label: '⚽  Sports',       emoji: '⚽' },
+  religion:   { label: '📖  Religion',     emoji: '📖' },
+  canvas:     { label: '🖼️  Canvas',       emoji: '🖼️' },
 };
 
 // ─────────────────────────────────────────────────────────
@@ -103,26 +110,39 @@ function buildMainMenu(cfg, allCmds, catReg, catOrder, { isOwner = false } = {})
     visibleCount += cmds.length;
 
     const meta = CATEGORY_META[cat] || { label: cat.charAt(0).toUpperCase() + cat.slice(1) };
-    body += `\n\`『 ${meta.label} 』\`\n`;
-    body += `╭───────────────────⊷\n`;
+    body += `\n*╭─❖ ${meta.label} ❖─╮*\n`;
+    const row = [];
     for (const name of cmds) {
-      body += `*┋ ▸ ${name}*\n`;
+      row.push(`*${prefix}${name}*`);
+      if (row.length === 2) {
+        body += `│ 🌸 ${row[0]}  ·  ${row[1]}\n`;
+        row.length = 0;
+      }
     }
-    body += `╰───────────────────⊷\n`;
+    if (row.length === 1) body += `│ 🌸 ${row[0]}\n`;
+    body += `*╰───────────────╯*\n`;
   }
 
   let out =
-    `*╭┈───〔 ${botName} 〕┈───⊷*\n` +
-    `*├⬗ Owner:* ${owner}\n` +
-    `*├⬗ Commands:* ${visibleCount}\n` +
-    `*├⬗ Runtime:* ${uptime}\n` +
-    `*├⬗ Prefix:* ${prefix}\n` +
-    `*├⬗ Mode:* ${modeCap}\n` +
-    `*├⬗ Version:* ${PKG_VERSION} Bᴇᴛᴀ\n` +
-    `*╰───────────────────⊷*\n`;
+    `*✧･ﾟ: *✧･ﾟ:* 　🌸　*:･ﾟ✧*:･ﾟ✧*\n` +
+    `*┏━『 ${botName} 』━┓*\n` +
+    `*┃*  🎀  *Anime Bot Menu*\n` +
+    `*┃*\n` +
+    `*┃*  👤 *Owner*    › ${owner}\n` +
+    `*┃*  📚 *Commands* › ${visibleCount}\n` +
+    `*┃*  ⏱️ *Runtime*  › ${uptime}\n` +
+    `*┃*  🔖 *Prefix*   › ${prefix}\n` +
+    `*┃*  🌙 *Mode*     › ${modeCap}\n` +
+    `*┃*  ✨ *Version*  › v${PKG_VERSION}\n` +
+    `*┗━━━━━━━━━━━━━━┛*\n` +
+    `\n*˚₊· ͟͟͞͞➳❥ Pick a spell below~*\n`;
 
   out += body;
-  out += `\n> *© ᴘᴏᴡᴇʀᴇᴅ ʙʏ ${botName}*`;
+  out +=
+    `\n*✧･ﾟ: *✧･ﾟ:* 　💖　*:･ﾟ✧*:･ﾟ✧*\n` +
+    `_Type *${prefix}menu <category>* for details_\n` +
+    `_Example: *${prefix}menu anime* · *${prefix}menu ai*_\n` +
+    `> *© powered by ${botName}  ✧  made with 🌸*`;
   return out;
 }
 
@@ -146,7 +166,8 @@ function buildCategoryMenu(catKey, cfg, allCmds, catReg, { isOwner = false } = {
   if (!cmds.length) return null;
 
   let out =
-    `┏━━〔 *${meta.label} COMMANDS* 〕━━┓\n\n`;
+    `*✧ 🌸 ${meta.label} 🌸 ✧*\n` +
+    `*┏━━━━━━━━━━━━━━┓*\n\n`;
 
   for (let i = 0; i < cmds.length; i++) {
     const name    = cmds[i];
@@ -154,20 +175,18 @@ function buildCategoryMenu(catKey, cfg, allCmds, catReg, { isOwner = false } = {
     const desc    = cmd?.desc    || 'No description available.';
     const usage   = cmd?.usage   || `${prefix}${name}`;
     const perm    = cmd?.permissions || 'all';
-    const isLast  = i === cmds.length - 1;
 
     out +=
-      `├ *${prefix}${name}*\n` +
-      `│  ↳ ${desc}\n` +
-      `│  Usage: ${usage}\n` +
-      `│  Permission: ${permLabel(perm)}\n`;
-
-    if (!isLast) out += `│\n`;
+      `*│ ✨ ${prefix}${name}*\n` +
+      `*│*   ↳ ${desc}\n` +
+      `*│*   📌 ${usage}\n` +
+      `*│*   🔒 ${permLabel(perm)}\n`;
+    if (i < cmds.length - 1) out += `*│*\n`;
   }
 
   out +=
-    `\n┗━━━━━━━━━━━━━━━━━━━━━━━┛\n` +
-    `_Type *${prefix}help <command>* for full details_`;
+    `\n*┗━━━━━━━━━━━━━━┛*\n` +
+    `_Type *${prefix}help <command>* for the full scroll~_`;
 
   return out;
 }
@@ -248,12 +267,13 @@ const mainCommands = {
       }
 
       const text = buildMainMenu(cfg, allCmds, catReg, catOrder, { isOwner });
+      const menuPath = resolveMenuImagePath();
 
-      // Send menu with the banner image if it exists, otherwise text-only
-      if (fs.existsSync(MENU_IMAGE_PATH)) {
-        const menuMime = MENU_IMAGE_PATH.endsWith('.png') ? 'image/png' : 'image/jpeg';
+      // Send menu with banner image if available
+      if (menuPath) {
+        const menuMime = menuPath.endsWith('.png') ? 'image/png' : 'image/jpeg';
         await sock.sendMessage(jid, {
-          image:    fs.readFileSync(MENU_IMAGE_PATH),
+          image:    fs.readFileSync(menuPath),
           caption:  text,
           mimetype: menuMime
         });

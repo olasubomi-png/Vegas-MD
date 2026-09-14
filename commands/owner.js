@@ -778,6 +778,107 @@ const ownerCommands = {
     })
   },
 
+  // ── Change menu banner image (reply to a picture) ───────
+  setmenupic: {
+    category: 'owner',
+    reaction: '🖼️',
+    desc: 'Set the .menu banner image (reply to a photo)',
+    usage: '.setmenupic',
+    aliases: ['setmenuimg', 'menupic', 'setbanner'],
+    permissions: 'owner',
+    examples: ['.setmenupic (reply to an image)'],
+    exec: ownerOnly(async (args, sock, jid, isGroup, sender, message) => {
+      const { downloadMediaMessage } = require('baileys');
+      const m = message?.message;
+      const ctx =
+        m?.extendedTextMessage?.contextInfo ||
+        m?.imageMessage?.contextInfo ||
+        null;
+      const quoted = ctx?.quotedMessage;
+      const imgMsg = quoted?.imageMessage || m?.imageMessage || null;
+
+      if (!imgMsg) {
+        return sock.sendMessage(jid, {
+          text:
+            '🖼️ *Set Menu Picture*\n\n' +
+            'Reply to an *image* with *.setmenupic*\n' +
+            'or send an image with caption *.setmenupic*\n\n' +
+            'That image becomes the banner for *.menu*.\n' +
+            'Use *.delmenupic* to restore the default.'
+        });
+      }
+
+      try {
+        await sock.sendMessage(jid, { text: '🖼️ Saving menu banner…' });
+        let buf;
+        if (quoted?.imageMessage) {
+          const fake = {
+            key: {
+              remoteJid: jid,
+              id: ctx?.stanzaId || message.key?.id,
+              participant: ctx?.participant,
+              fromMe: false
+            },
+            message: quoted
+          };
+          buf = await downloadMediaMessage(fake, 'buffer', {
+            reuploadRequest: sock.updateMediaMessage
+          });
+        } else {
+          buf = await downloadMediaMessage(message, 'buffer', {
+            reuploadRequest: sock.updateMediaMessage
+          });
+        }
+        if (!buf || !buf.length) throw new Error('Could not download image');
+
+        const assetsDir = path.join(__dirname, '..', 'assets');
+        fs.mkdirSync(assetsDir, { recursive: true });
+        const outPath = path.join(assetsDir, 'menu-custom.jpg');
+        fs.writeFileSync(outPath, buf);
+
+        await sock.sendMessage(jid, {
+          image: buf,
+          caption:
+            '✅ *Menu banner updated!*\n\n' +
+            'Open *.menu* to see your new picture.\n' +
+            'Use *.delmenupic* to remove it.'
+        });
+      } catch (err) {
+        await sock.sendMessage(jid, {
+          text: `❌ Failed to set menu picture: ${err.message}`
+        });
+      }
+    })
+  },
+
+  delmenupic: {
+    category: 'owner',
+    reaction: '🗑️',
+    desc: 'Remove custom menu banner and restore default',
+    usage: '.delmenupic',
+    aliases: ['resetmenupic', 'delmenuimg'],
+    permissions: 'owner',
+    examples: ['.delmenupic'],
+    exec: ownerOnly(async (args, sock, jid) => {
+      const outPath = path.join(__dirname, '..', 'assets', 'menu-custom.jpg');
+      if (!fs.existsSync(outPath)) {
+        return sock.sendMessage(jid, {
+          text: 'ℹ️ No custom menu picture is set. Default banner is already in use.'
+        });
+      }
+      try {
+        fs.unlinkSync(outPath);
+        await sock.sendMessage(jid, {
+          text: '✅ Custom menu banner removed. *.menu* will use the default image again.'
+        });
+      } catch (err) {
+        await sock.sendMessage(jid, {
+          text: `❌ Could not delete menu picture: ${err.message}`
+        });
+      }
+    })
+  },
+
   // ── Shell / terminal (owner only — runs on the VPS) ─────
   shell: {
     category: 'owner',
