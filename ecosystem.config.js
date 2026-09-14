@@ -1,7 +1,7 @@
 module.exports = {
   apps: [
     {
-      name: 'OLASUBOMI-MD',
+      name: '𝑺𝑼𝑩𝑩𝒀-𝑴𝑫',
       script: './main.js',
       instances: 1,
       // fork mode is correct for a WhatsApp bot. cluster mode is designed for
@@ -12,7 +12,7 @@ module.exports = {
       watch: false,
       env: {
         NODE_ENV: 'production',
-        BOT_NAME: 'OLASUBOMI-MD',
+        BOT_NAME: '𝑺𝑼𝑩𝑩𝒀-𝑴𝑫',
         BOT_VERSION: '3.0.0',
         BOT_PREFIX: '.',
         BOT_MODE: 'private'

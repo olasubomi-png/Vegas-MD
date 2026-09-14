@@ -10,8 +10,8 @@ const settingsCommands = {
       const cfg = botConfig || global.botConfig || {};
       await sock.sendMessage(jid, {
         text:
-          `⚙️ *OLASUBOMI-MD Settings*\n\n` +
-          `👑 Owner   : ${cfg.ownerName || 'Olasubomi'}\n` +
+          `⚙️ *𝑺𝑼𝑩𝑩𝒀-𝑴𝑫 Settings*\n\n` +
+          `👑 Owner   : ${cfg.ownerName || '𝑺𝑼𝑩𝑩𝒀'}\n` +
           `🔖 Prefix  : ${cfg.prefix || '.'}\n` +
           `🔒 Mode    : ${cfg.mode || 'private'}\n` +
           `🏷️  Version : v${cfg.version || '3.0.0'}\n` +

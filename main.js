@@ -241,7 +241,7 @@ const _primaryOwnerNum = (process.env.OWNER_NUMBER || '').replace(/\D/g, '');
 const _primaryOwnerJid = _primaryOwnerNum ? `${_primaryOwnerNum}@s.whatsapp.net` : '';
 
 const botConfig = {
-  name:        process.env.BOT_NAME   || 'OLASUBOMI-MD',
+  name:        process.env.BOT_NAME   || '𝑺𝑼𝑩𝑩𝒀-𝑴𝑫',
   version:     '3.0.0',
   beta:        'Beta',
   // Load prefix/mode from per-owner settings first, fall back to global then env
@@ -249,7 +249,7 @@ const botConfig = {
   mode:        db.getOwnerSetting(_primaryOwnerJid, 'mode',   null) || db.getSetting('mode',   null) || process.env.BOT_MODE   || 'private',
   ownerNumber: process.env.OWNER_NUMBER || '',
   ownerJid:    _primaryOwnerJid,
-  ownerName:   process.env.OWNER_NAME  || 'Olasubomi',
+  ownerName:   process.env.OWNER_NAME  || '𝑺𝑼𝑩𝑩𝒀',
   description: 'Advanced WhatsApp Bot'
 };
 
@@ -1324,7 +1324,7 @@ async function handleCommand(command, args, message, sock, botConfig) {
 // Fetch the WA protocol version ONCE at startup, before the first connect().
 // All reconnects (including mid-pairing ones) reuse this cached value so no
 // extra network round-trip is added inside the handshake window.
-console.log('🚀 Starting OLASUBOMI-MD...');
+console.log('🚀 Starting 𝑺𝑼𝑩𝑩𝒀-𝑴𝑫...');
 (async () => {
   try {
     const { version, isLatest } = await fetchLatestBaileysVersion();

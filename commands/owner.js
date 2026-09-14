@@ -30,9 +30,9 @@ const ownerCommands = {
       await sock.sendMessage(jid, {
         text:
           `┏━━〔 👑 *Bot Owner* 〕━━┓\n` +
-          `┃  👤 Name  : ${cfg.ownerName || 'Olasubomi'}\n` +
+          `┃  👤 Name  : ${cfg.ownerName || '𝑺𝑼𝑩𝑩𝒀'}\n` +
           `┃  📞 Number: ${cfg.ownerNumber || 'Not set'}\n` +
-          `┃  🤖 Bot   : OLASUBOMI-MD v${require('../package.json').version || '3.0.0'}\n` +
+          `┃  🤖 Bot   : 𝑺𝑼𝑩𝑩𝒀-𝑴𝑫 v${require('../package.json').version || '3.0.0'}\n` +
           `┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛`
       });
     }
@@ -536,7 +536,7 @@ const ownerCommands = {
           `🔄 *Bot Update Info*\n\n` +
           `🏷️  Current Version : v${pkg.version}\n` +
           `📦 Package         : ${pkg.name}\n` +
-          `👤 Author          : ${pkg.author || 'Olasubomi'}\n\n` +
+          `👤 Author          : ${pkg.author || '𝑺𝑼𝑩𝑩𝒀'}\n\n` +
           `📁 To update, run:\n\`git pull && npm install\`\n\n` +
           `🔗 Repo: https://github.com/olasubomi-png/Vegas-MD`
       });

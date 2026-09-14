@@ -1,5 +1,5 @@
 'use strict';
-// commands/main.js — Custom Vegas-MD / OLASUBOMI-MD menu UI
+// commands/main.js — Custom Vegas-MD / 𝑺𝑼𝑩𝑩𝒀-𝑴𝑫 menu UI
 const fs   = require('fs');
 const path = require('path');
 
@@ -104,8 +104,8 @@ function formatWatTime() {
 // ─────────────────────────────────────────────────────────
 function buildMainMenu(cfg, allCmds, catReg, catOrder, { isOwner = false } = {}) {
   const prefix  = cfg?.prefix    || '.';
-  const botName = cfg?.name      || process.env.BOT_NAME || 'OLASUBOMI-MD';
-  const owner   = cfg?.ownerName || process.env.OWNER_NAME || 'Olasubomi';
+  const botName = cfg?.name      || process.env.BOT_NAME || '𝑺𝑼𝑩𝑩𝒀-𝑴𝑫';
+  const owner   = cfg?.ownerName || process.env.OWNER_NAME || '𝑺𝑼𝑩𝑩𝒀';
   const mode    = cfg?.mode      || 'private';
   const modeCap = mode.charAt(0).toUpperCase() + mode.slice(1);
   const uptime  = getUptime();
@@ -188,7 +188,7 @@ function buildCategoryMenu(catKey, cfg, allCmds, catReg, { isOwner = false } = {
   if (!meta) return null;
   if (catKey === 'owner' && !isOwner) return null;
   const prefix = cfg?.prefix || '.';
-  const botName = cfg?.name || process.env.BOT_NAME || 'OLASUBOMI-MD';
+  const botName = cfg?.name || process.env.BOT_NAME || '𝑺𝑼𝑩𝑩𝒀-𝑴𝑫';
   const cmds   = [...new Set(catReg[catKey] || [])]
     .filter((name) => {
       if (!name || !name.trim()) return false;
@@ -224,7 +224,7 @@ function buildCategoryMenu(catKey, cfg, allCmds, catReg, { isOwner = false } = {
 // ─────────────────────────────────────────────────────────
 function buildHelpCard(name, cmd, cfg) {
   const prefix    = cfg?.prefix || '.';
-  const botName   = cfg?.name || process.env.BOT_NAME || 'OLASUBOMI-MD';
+  const botName   = cfg?.name || process.env.BOT_NAME || '𝑺𝑼𝑩𝑩𝒀-𝑴𝑫';
   const perm      = cmd.permissions || 'all';
   const cat       = cmd.category
     ? (CATEGORY_META[cmd.category]?.label || cmd.category.toUpperCase())
@@ -328,7 +328,7 @@ const mainCommands = {
       if (!name) {
         return sock.sendMessage(jid, {
           text:
-            `┏━━〔 🤖 *OLASUBOMI-MD* 〕━━┓\n` +
+            `┏━━〔 🤖 *𝑺𝑼𝑩𝑩𝒀-𝑴𝑫* 〕━━┓\n` +
             `┃\n` +
             `┃  *${prefix}menu*          Full command list\n` +
             `┃  *${prefix}menu ai*       AI commands\n` +
@@ -367,7 +367,7 @@ const mainCommands = {
 
       await sock.sendMessage(jid, {
         text:
-          `┏━━〔 🤖 *OLASUBOMI-MD* 〕━━┓\n` +
+          `┏━━〔 🤖 *𝑺𝑼𝑩𝑩𝒀-𝑴𝑫* 〕━━┓\n` +
           `┃ 🟢 Status   : Online\n` +
           `┃ 🚀 Ping     : ${_lastPing} ms\n` +
           `┃ ⏱️  Uptime   : ${getUptime()}\n` +

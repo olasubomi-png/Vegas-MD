@@ -342,6 +342,90 @@ async function videoToWebp(inputBuf) {
   }
 }
 
+/** Default sticker pack branding */
+function defaultStickerMeta() {
+  return {
+    packname: process.env.STICKER_PACKNAME || process.env.BOT_NAME || '𝑺𝑼𝑩𝑩𝒀-𝑴𝑫',
+    author:   process.env.STICKER_AUTHOR   || process.env.OWNER_NAME || '𝑺𝑼𝑩𝑩𝒀'
+  };
+}
+
+/**
+ * Embed WhatsApp sticker pack name + publisher into a WebP buffer.
+ * Pure JS — no extra dependency.
+ */
+async function writeStickerExif(webpBuffer, packname, author) {
+  const pack = String(packname || '𝑺𝑼𝑩𝑩𝒀-𝑴𝑫').slice(0, 80);
+  const pub  = String(author || '𝑺𝑼𝑩𝑩𝒀').slice(0, 80);
+
+  // Prefer node-webpmux when available
+  try {
+    const webp = require('node-webpmux');
+    const img = new webp.Image();
+    await img.load(webpBuffer);
+    const json = {
+      'sticker-pack-id': 'com.subby.md',
+      'sticker-pack-name': pack,
+      'sticker-pack-publisher': pub,
+      emojis: ['✨']
+    };
+    const jsonBuf = Buffer.from(JSON.stringify(json));
+    const exifAttr = Buffer.from([
+      0x49, 0x49, 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00,
+      0x01, 0x00, 0x41, 0x57, 0x07, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x16, 0x00, 0x00, 0x00
+    ]);
+    const exif = Buffer.concat([exifAttr, jsonBuf]);
+    exif.writeUIntLE(jsonBuf.length, 14, 4);
+    img.exif = exif;
+    return await img.save(null);
+  } catch (_) {
+    // Fallback: try webpmux CLI if installed
+  }
+
+  const inFile  = tmpFile('.webp');
+  const outFile = tmpFile('.webp');
+  const exifFile = tmpFile('.exif');
+  try {
+    const json = {
+      'sticker-pack-id': 'com.subby.md',
+      'sticker-pack-name': pack,
+      'sticker-pack-publisher': pub,
+      emojis: ['✨']
+    };
+    const jsonBuf = Buffer.from(JSON.stringify(json));
+    const exifAttr = Buffer.from([
+      0x49, 0x49, 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00,
+      0x01, 0x00, 0x41, 0x57, 0x07, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x16, 0x00, 0x00, 0x00
+    ]);
+    const exif = Buffer.concat([exifAttr, jsonBuf]);
+    exif.writeUIntLE(jsonBuf.length, 14, 4);
+
+    fs.writeFileSync(inFile, webpBuffer);
+    fs.writeFileSync(exifFile, exif);
+
+    await new Promise((resolve, reject) => {
+      const proc = spawn('webpmux', ['-set', 'exif', exifFile, inFile, '-o', outFile]);
+      let err = '';
+      proc.stderr.on('data', d => { err += d.toString(); });
+      proc.on('close', code => {
+        if (code === 0 && fs.existsSync(outFile)) resolve();
+        else reject(new Error(err || 'webpmux failed'));
+      });
+      proc.on('error', () => reject(new Error('webpmux not installed')));
+    });
+    return fs.readFileSync(outFile);
+  } catch (e) {
+    console.warn('[sticker] EXIF embed skipped:', e.message);
+    return webpBuffer; // still send sticker even if metadata fails
+  } finally {
+    for (const f of [inFile, outFile, exifFile]) {
+      try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch {}
+    }
+  }
+}
+
 // ── commands ───────────────────────────────────────────────────────────────
 const toolsCommands = {
 
@@ -370,7 +454,6 @@ const toolsCommands = {
         const buf = await dlQuoted(sock, jid, message, quoted);
         let webpBuf;
         if (stkMsg) {
-          // Already a sticker — just re-send
           webpBuf = buf;
         } else if (imgMsg) {
           const ext = (imgMsg.mimetype || 'image/jpeg').includes('png') ? '.png' : '.jpg';
@@ -378,6 +461,18 @@ const toolsCommands = {
         } else {
           webpBuf = await videoToWebp(buf);
         }
+        const meta = defaultStickerMeta();
+        // Optional: .sticker PackName | Author
+        const rawArgs = args.join(' ').trim();
+        if (rawArgs.includes('|')) {
+          const [p, a] = rawArgs.split('|').map(s => s.trim());
+          if (p) meta.packname = p;
+          if (a) meta.author = a;
+        } else if (args[0]) {
+          meta.packname = args[0];
+          if (args[1]) meta.author = args.slice(1).join(' ');
+        }
+        webpBuf = await writeStickerExif(webpBuf, meta.packname, meta.author);
         await sock.sendMessage(jid, { sticker: webpBuf });
       } catch (err) {
         await sock.sendMessage(jid, { text: `❌ Sticker creation failed: ${err.message}` });
@@ -388,19 +483,21 @@ const toolsCommands = {
   take: {
     category: 'sticker', desc: 'Steal/copy a sticker with custom pack name (reply to sticker)',
     usage: '.take [pack name] [author]', aliases: ['steal'], permissions: 'all',
-    examples: ['.take MyPack Olasubomi'],
+    examples: ['.take MyPack 𝑺𝑼𝑩𝑩𝒀'],
     exec: async (args, sock, jid, isGroup, sender, message) => {
       const ctx    = getCtx(message);
       const quoted = ctx?.quotedMessage;
       if (!quoted?.stickerMessage) {
         return sock.sendMessage(jid, { text: `🏷️ *Take Sticker*\n\nReply to a *sticker* with *.take [pack] [author]*.` });
       }
-      const pack   = args[0] || 'OLASUBOMI-MD';
-      const author = args[1] || 'Olasubomi';
+      const defaults = defaultStickerMeta();
+      const pack   = args[0] || defaults.packname;
+      const author = args[1] || defaults.author;
       await sock.sendMessage(jid, { text: `🏷️ Copying sticker... (Pack: ${pack})` });
       try {
         const buf = await dlQuoted(sock, jid, message, quoted);
-        await sock.sendMessage(jid, { sticker: buf });
+        const tagged = await writeStickerExif(buf, pack, author);
+        await sock.sendMessage(jid, { sticker: tagged });
         await sock.sendMessage(jid, { text: `✅ Sticker saved!\n📦 Pack: *${pack}*\n✍️ Author: *${author}*` });
       } catch (err) {
         await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
