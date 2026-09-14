@@ -81,7 +81,7 @@ const CATEGORY_META = {
 };
 
 // ─────────────────────────────────────────────────────────
-// MAIN MENU  (.menu) — clean / minimal
+// MAIN MENU  (.menu) — classic frame, customized for Vegas
 // ─────────────────────────────────────────────────────────
 function buildMainMenu(cfg, allCmds, catReg, catOrder, { isOwner = false } = {}) {
   const prefix  = cfg?.prefix    || '.';
@@ -111,24 +111,32 @@ function buildMainMenu(cfg, allCmds, catReg, catOrder, { isOwner = false } = {})
     visibleCount += cmds.length;
 
     const meta = CATEGORY_META[cat] || { label: String(cat) };
-    body += `\n*${meta.label}*\n`;
-    // 3 commands per line, compact and readable
-    for (let i = 0; i < cmds.length; i += 3) {
-      const slice = cmds.slice(i, i + 3).map((n) => `${prefix}${n}`);
-      body += slice.join('  ·  ') + '\n';
+    body += `\n\`『 ${meta.label} 』\`\n`;
+    body += `╭───────────────────⊷\n`;
+    for (const name of cmds) {
+      body += `*┋ ▸ ${prefix}${name}*\n`;
     }
+    body += `╰───────────────────⊷\n`;
   }
 
   let out =
-    `*${botName}*\n` +
-    `Owner ${owner}  ·  ${visibleCount} cmds  ·  ${modeCap}\n` +
-    `Uptime ${uptime}  ·  prefix \`${prefix}\`  ·  v${PKG_VERSION}\n` +
-    `────────────────────`;
+    `*╭┈───〔 ${botName} 〕┈───⊷*\n` +
+    `*├◇ Owner:* ${owner}\n` +
+    `*├◇ Commands:* ${visibleCount}\n` +
+    `*├◇ Runtime:* ${uptime}\n` +
+    `*├◇ Prefix:* ${prefix}\n` +
+    `*├◇ Mode:* ${modeCap}\n` +
+    `*├◇ Version:* ${PKG_VERSION}\n` +
+    `*╰───────────────────⊷*\n`;
 
   out += body;
   out +=
-    `\n────────────────────\n` +
-    `${prefix}menu <category>  ·  ${prefix}help <cmd>`;
+    `\n*╭┈───〔 Guide 〕┈───⊷*\n` +
+    `*├◇* ${prefix}menu <category>\n` +
+    `*├◇* ${prefix}help <command>\n` +
+    `*├◇* ${prefix}setmenupic _(owner)_\n` +
+    `*╰───────────────────⊷*\n` +
+    `\n> © ${botName}`;
   return out;
 }
 
