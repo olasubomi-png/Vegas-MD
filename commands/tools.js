@@ -306,14 +306,23 @@ async function removeBgFree(imageBuffer) {
 //   • Drop -vsync 0 (deprecated in ffmpeg 6+) — not needed for a single-frame image.
 //   • Use white padding instead of transparent (#00000000) — avoids colour-space
 //     warnings on JPEG inputs that have no alpha channel.
+// Full-bleed 512x512: scale up to cover, then center-crop (no white bars).
+const STICKER_VF_STATIC =
+  'scale=512:512:force_original_aspect_ratio=increase,crop=512:512';
+const STICKER_VF_ANIM =
+  'fps=15,scale=512:512:force_original_aspect_ratio=increase,crop=512:512';
+
 async function imageToWebp(inputBuf, inputExt = '.jpg') {
   const inFile  = tmpFile(inputExt);
   const outFile = tmpFile('.webp');
   fs.writeFileSync(inFile, inputBuf);
   try {
     await ffmpegRun(inFile, outFile, [
-      '-vf', 'scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:white',
-      '-codec:v', 'libwebp', '-quality', '80', '-an'
+      '-vf', STICKER_VF_STATIC,
+      '-codec:v', 'libwebp',
+      '-quality', '90',
+      '-compression_level', '4',
+      '-an'
     ]);
     return fs.readFileSync(outFile);
   } finally {
@@ -321,19 +330,20 @@ async function imageToWebp(inputBuf, inputExt = '.jpg') {
   }
 }
 
-// Convert video buffer to an animated WebP sticker via ffmpeg.
-// Key fixes:
-//   • Explicit codec libwebp_anim (animated) for clarity.
-//   • -fps_mode passthrough replaces deprecated -vsync 0 (ffmpeg 6+).
-//   • White padding; max 7 s.
+// Animated WebP sticker — full frame, max 7 s.
 async function videoToWebp(inputBuf) {
   const inFile  = tmpFile('.mp4');
   const outFile = tmpFile('.webp');
   fs.writeFileSync(inFile, inputBuf);
   try {
     await ffmpegRun(inFile, outFile, [
-      '-vf', 'fps=15,scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:white',
-      '-codec:v', 'libwebp_anim', '-loop', '0', '-preset', 'default', '-an', '-t', '7',
+      '-vf', STICKER_VF_ANIM,
+      '-codec:v', 'libwebp_anim',
+      '-loop', '0',
+      '-preset', 'default',
+      '-quality', '80',
+      '-an',
+      '-t', '7',
       '-fps_mode', 'passthrough'
     ]);
     return fs.readFileSync(outFile);
