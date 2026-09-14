@@ -151,17 +151,20 @@ function buildCategoryMenu(catKey, cfg, allCmds, catReg, { isOwner = false } = {
     .sort();
   if (!cmds.length) return null;
 
-  let out = `*${meta.label}*\n────────────────────\n`;
+  let out =
+    `*╭┈───〔 ${meta.label} 〕┈───⊷*\n`;
 
   for (const name of cmds) {
     if (!name) continue;
     const cmd = allCmds[name];
-    const desc = cmd?.desc || '';
-    out += `*${prefix}${name}*\n`;
-    if (desc) out += `  ${desc}\n`;
+    const desc = cmd?.desc || 'No description';
+    out += `*├◇ ${prefix}${name}*\n`;
+    out += `*│*  ${desc}\n`;
   }
 
-  out += `────────────────────\n${prefix}help <command>`;
+  out +=
+    `*╰───────────────────⊷*\n` +
+    `\n_Type *${prefix}help <command>* for details_`;
   return out;
 }
 
