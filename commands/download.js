@@ -10,9 +10,12 @@ const axios = require('axios');
 const {
   MAX_AUDIO_BYTES,
   MAX_VIDEO_BYTES,
+  MAX_IMAGE_BYTES,
   downloadMedia,
   fetchMusic,
   fetchPinterestDownload,
+  fetchYoutubeMp3,
+  fetchYoutubeMp4,
 } = require('../lib/david-cyril-api');
 
 const execAsync = promisify(exec);
@@ -23,42 +26,70 @@ function tmpFile(ext) {
   return path.join(os.tmpdir(), `olamd_${Date.now()}_${Math.random().toString(36).slice(2)}${ext}`);
 }
 
-// Strict YouTube URL validation — rejects shell metacharacters
+// Strict URL validation — rejects shell metacharacters
+function assertHttpUrl(url) {
+  if (!/^https?:\/\/[^\s<>"']+$/i.test(url)) {
+    throw new Error('Invalid URL');
+  }
+}
+
 function assertYouTubeUrl(url) {
-  if (!/^https?:\/\/(www\.)?(youtube\.com|youtu\.be)\/[\w\-?=&#%.+/]+$/.test(url)) {
+  if (!/^https?:\/\/(www\.)?(youtube\.com|youtu\.be|music\.youtube\.com)\/[\w\-?=&#%.+/]+$/i.test(url)) {
     throw new Error('Invalid YouTube URL');
   }
 }
 
-// ── cobalt.tools — multi-platform downloader (YouTube, Twitter, Instagram, FB) ──
-async function cobaltFetch(url, downloadMode = 'auto', audioFormat = 'mp3') {
-  const { data } = await axios.post(
-    'https://api.cobalt.tools/',
-    { url, downloadMode, audioFormat, filenameStyle: 'basic', quality: '720' },
-    {
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept':       'application/json',
-        'User-Agent':   'OLASUBOMI-MD/3.0'
-      },
-      timeout: 30000
+function isYouTubeUrl(url) {
+  return /youtube\.com|youtu\.be|music\.youtube\.com/i.test(url || '');
+}
+
+/**
+ * Multi-provider media URL fetch.
+ * Cobalt public API now requires JWT — replaced with:
+ *  1) yt-dlp (best, any site)
+ *  2) David Cyril ytmp3/ytmp4 for YouTube
+ */
+async function resolveMediaUrl(url, mode = 'auto') {
+  assertHttpUrl(url);
+  const errors = [];
+
+  // 1) yt-dlp — supports YT / IG / FB / X / etc.
+  if (await ytDlpAvailable()) {
+    try {
+      const filePath = await ytDlpDownloadAny(url, mode === 'audio' ? 'audio' : 'video');
+      return { type: 'file', path: filePath };
+    } catch (err) {
+      errors.push(`yt-dlp: ${err.message}`);
     }
-  );
-  // Normalise all response shapes to a single URL string
-  if (data.status === 'error') throw new Error(data.error?.code || 'cobalt error');
-  if (data.status === 'picker') {
-    // picker is an array of items; take the first media URL
-    const item = Array.isArray(data.picker) ? data.picker[0] : null;
-    const picked = item?.url || item?.thumb || null;
-    if (!picked) throw new Error('cobalt returned an empty picker list');
-    return picked;
   }
-  // 'stream', 'redirect', 'tunnel' — all have a single url field
-  const resolved = typeof data.url === 'string' ? data.url
-                 : Array.isArray(data.url)       ? data.url[0]
-                 : null;
-  if (!resolved) throw new Error('cobalt returned no usable URL');
-  return resolved;
+
+  // 2) YouTube-only remote APIs
+  if (isYouTubeUrl(url)) {
+    try {
+      if (mode === 'audio') {
+        const info = await fetchYoutubeMp3(url);
+        return { type: 'url', url: info.downloadUrl, title: info.title, meta: info };
+      }
+      const info = await fetchYoutubeMp4(url);
+      return { type: 'url', url: info.downloadUrl, title: info.title, meta: info };
+    } catch (err) {
+      errors.push(`cyril-yt: ${err.message}`);
+    }
+  }
+
+  throw new Error(
+    errors.length
+      ? errors.slice(0, 3).join(' | ')
+      : 'No downloader available. Install yt-dlp: sudo apt install yt-dlp || pip install -U yt-dlp'
+  );
+}
+
+/** @deprecated name kept for internal calls that expected a URL string */
+async function cobaltFetch(url, downloadMode = 'auto') {
+  const resolved = await resolveMediaUrl(url, downloadMode === 'audio' ? 'audio' : 'auto');
+  if (resolved.type === 'url') return resolved.url;
+  // Caller expected a remote URL — upload not possible; rethrow with file path hint
+  throw new Error(`Local file ready at ${resolved.path} (use yt-dlp path handlers)`);
 }
 
 // ── yt-dlp helper — uses execFile (no shell) to prevent injection ──────────
@@ -67,14 +98,18 @@ async function ytDlpAvailable() {
 }
 
 async function ytDlpDownload(url, format = 'audio', quality = '720') {
-  // Validate URL strictly — no shell is involved, but belt-and-braces
   assertYouTubeUrl(url);
+  return ytDlpDownloadAny(url, format, quality);
+}
 
-  const outTemplate = tmpFile('');          // base path without extension
-  // player_client=android,web works around YouTube's SABR streaming rollout
-  // (web-only formats get skipped without a URL) — android formats need no
-  // PO token for the "best" muxed/adaptive formats yt-dlp picks here.
-  const clientArgs = ['--extractor-args', 'youtube:player_client=android,web'];
+/** yt-dlp for any supported site (YouTube, IG, FB, X, …) */
+async function ytDlpDownloadAny(url, format = 'video', quality = '720') {
+  assertHttpUrl(url);
+
+  const outTemplate = tmpFile('');
+  const clientArgs = isYouTubeUrl(url)
+    ? ['--extractor-args', 'youtube:player_client=android,web']
+    : [];
   const args = format === 'audio'
     ? ['-x', '--audio-format', 'mp3', '--audio-quality', '5',
        '-o', outTemplate + '.%(ext)s', url,
@@ -117,10 +152,38 @@ async function ytDlpSearch(query) {
   };
 }
 
+async function searchYouTubeHtml(query) {
+  const { data: html } = await axios.get('https://www.youtube.com/results', {
+    params: { search_query: query, sp: 'EgIQAQ%3D%3D' },
+    timeout: 20_000,
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      'Accept-Language': 'en-US,en;q=0.9'
+    }
+  });
+  const ids = [...String(html).matchAll(/"videoId":"([a-zA-Z0-9_-]{11})"/g)].map(m => m[1]);
+  const titles = [...String(html).matchAll(/"title":\{"runs":\[\{"text":"([^"]+)"\}\]/g)].map(m => m[1]);
+  if (!ids.length) throw new Error('YouTube HTML search returned no results');
+  const videoId = ids[0];
+  const title = titles[0] || query;
+  return {
+    videoId,
+    title: title.replace(/\\u0026/g, '&'),
+    author: 'YouTube',
+    lengthSeconds: 0
+  };
+}
+
 async function searchYouTube(query) {
   const errors = [];
   if (await ytDlpAvailable()) {
     try { return await ytDlpSearch(query); } catch (err) { errors.push(`yt-dlp: ${err.message}`); }
+  }
+
+  try {
+    return await searchYouTubeHtml(query);
+  } catch (err) {
+    errors.push(`html: ${err.message}`);
   }
 
   const bases = [
@@ -134,7 +197,7 @@ async function searchYouTube(query) {
       const { data } = await axios.get(`${base}/api/v1/search`, {
         params: { q: query, type: 'video', fields: 'videoId,title,author,lengthSeconds' },
         timeout: 15_000,
-        headers: { 'User-Agent': 'Vegas-MD/3.0', Accept: 'application/json' }
+        headers: { 'User-Agent': 'SUBBY-MD/3.0', Accept: 'application/json' }
       });
       if (Array.isArray(data) && data.length) {
         const item = data.find(v => v.videoId && v.title) || data[0];
@@ -1187,12 +1250,21 @@ const downloadCommands = {
         return sock.sendMessage(jid, { text: `⬇️ *Facebook Downloader*\n\nUsage: *.facebook <url>*` });
       }
       await sock.sendMessage(jid, { text: `⏳ Fetching Facebook video...` });
+      let filePath;
       try {
-        const dlUrl = await cobaltFetch(url, 'auto');
-        if (!dlUrl) throw new Error('No download link returned');
-        await sendVideoFromUrl(sock, jid, dlUrl, `📘 *Facebook Video*`);
+        const resolved = await resolveMediaUrl(url, 'auto');
+        if (resolved.type === 'file') {
+          filePath = resolved.path;
+          await sendVideoFromFile(sock, jid, filePath, `📘 *Facebook Video*`);
+        } else {
+          await sendVideoFromUrl(sock, jid, resolved.url, `📘 *Facebook Video*`);
+        }
       } catch (err) {
-        await sock.sendMessage(jid, { text: `❌ Facebook download failed: ${err.message}\n\n_Try a direct video URL (right-click → copy video URL)._` });
+        await sock.sendMessage(jid, {
+          text: `❌ Facebook download failed: ${err.message}\n\n💡 Install yt-dlp for best results:\n\`sudo apt install yt-dlp\` or \`pip install -U yt-dlp\``
+        });
+      } finally {
+        if (filePath) try { fs.unlinkSync(filePath); } catch {}
       }
     }
   },
@@ -1218,17 +1290,33 @@ const downloadCommands = {
         return sock.sendMessage(jid, { text: `⬇️ *Instagram Downloader*\n\nUsage: *.instagram <url>*\n\nWorks with posts, reels, and stories.` });
       }
       await sock.sendMessage(jid, { text: `⏳ Fetching Instagram media...` });
+      let filePath;
       try {
-        const dlUrl = await cobaltFetch(url, 'auto');
-        if (!dlUrl) throw new Error('No download link returned');
-        // Try as video first, fall back to image
-        try {
-          await sendVideoFromUrl(sock, jid, dlUrl, `📸 *Instagram Media*`);
-        } catch {
-          await sock.sendMessage(jid, { image: { url: dlUrl }, caption: `📸 *Instagram Photo*` });
+        const resolved = await resolveMediaUrl(url, 'auto');
+        if (resolved.type === 'file') {
+          filePath = resolved.path;
+          const lower = filePath.toLowerCase();
+          if (/\.(jpg|jpeg|png|webp)$/.test(lower)) {
+            await sock.sendMessage(jid, {
+              image: fs.readFileSync(filePath),
+              caption: `📸 *Instagram Photo*`
+            });
+          } else {
+            await sendVideoFromFile(sock, jid, filePath, `📸 *Instagram Media*`);
+          }
+        } else {
+          try {
+            await sendVideoFromUrl(sock, jid, resolved.url, `📸 *Instagram Media*`);
+          } catch {
+            await sock.sendMessage(jid, { image: { url: resolved.url }, caption: `📸 *Instagram Photo*` });
+          }
         }
       } catch (err) {
-        await sock.sendMessage(jid, { text: `❌ Instagram download failed: ${err.message}` });
+        await sock.sendMessage(jid, {
+          text: `❌ Instagram download failed: ${err.message}\n\n💡 Public posts work best. Install yt-dlp:\n\`pip install -U yt-dlp\``
+        });
+      } finally {
+        if (filePath) try { fs.unlinkSync(filePath); } catch {}
       }
     }
   },
@@ -1251,12 +1339,21 @@ const downloadCommands = {
         return sock.sendMessage(jid, { text: `⬇️ *Twitter/X Downloader*\n\nUsage: *.twitter <url>*` });
       }
       await sock.sendMessage(jid, { text: `⏳ Fetching Twitter/X video...` });
+      let filePath;
       try {
-        const dlUrl = await cobaltFetch(url, 'auto');
-        if (!dlUrl) throw new Error('No download link returned');
-        await sendVideoFromUrl(sock, jid, dlUrl, `🐦 *Twitter/X Video*`);
+        const resolved = await resolveMediaUrl(url, 'auto');
+        if (resolved.type === 'file') {
+          filePath = resolved.path;
+          await sendVideoFromFile(sock, jid, filePath, `🐦 *Twitter/X Video*`);
+        } else {
+          await sendVideoFromUrl(sock, jid, resolved.url, `🐦 *Twitter/X Video*`);
+        }
       } catch (err) {
-        await sock.sendMessage(jid, { text: `❌ Twitter download failed: ${err.message}` });
+        await sock.sendMessage(jid, {
+          text: `❌ Twitter download failed: ${err.message}\n\n💡 Install yt-dlp:\n\`pip install -U yt-dlp\``
+        });
+      } finally {
+        if (filePath) try { fs.unlinkSync(filePath); } catch {}
       }
     }
   },
@@ -1268,27 +1365,30 @@ const downloadCommands = {
     examples: ['.ytmp3 https://youtu.be/xxx'],
     exec: async (args, sock, jid) => {
       const url = args[0];
-      if (!url || !/youtube\.com|youtu\.be/.test(url)) {
+      if (!url || !/youtube\.com|youtu\.be|music\.youtube\.com/.test(url)) {
         return sock.sendMessage(jid, { text: `🎵 *YouTube MP3 Downloader*\n\nUsage: *.ytmp3 <url>*` });
       }
       await sock.sendMessage(jid, { text: `⏳ Downloading YouTube audio...` });
+      let filePath;
       try {
-        if (await ytDlpAvailable()) {
-          let filePath;
-          try {
-            filePath = await ytDlpDownload(url, 'audio');
-            await sendAudioFromFile(sock, jid, filePath, `🎵 *YouTube Audio*\n🔗 ${url}`);
-          } finally {
-            if (filePath) try { fs.unlinkSync(filePath); } catch {}
-          }
-        } else {
-          // Fallback: cobalt audio
-          const dlUrl = await cobaltFetch(url, 'audio', 'mp3');
-          if (!dlUrl) throw new Error('No audio link returned');
-          await sendAudioFromUrl(sock, jid, dlUrl, `🎵 *YouTube Audio*\n🔗 ${url}`);
+        // Prefer Cyril remote MP3 (no yt-dlp needed), then yt-dlp
+        try {
+          const info = await fetchYoutubeMp3(url);
+          await sendAudioFromUrl(sock, jid, info.downloadUrl, `🎵 *${info.title}*\n🔗 ${url}`);
+          return;
+        } catch (e1) {
+          console.warn('[ytmp3] cyril failed:', e1.message);
         }
+        if (await ytDlpAvailable()) {
+          filePath = await ytDlpDownload(url, 'audio');
+          await sendAudioFromFile(sock, jid, filePath, `🎵 *YouTube Audio*\n🔗 ${url}`);
+          return;
+        }
+        throw new Error('All YouTube audio providers failed. Install yt-dlp.');
       } catch (err) {
-        await sock.sendMessage(jid, { text: `❌ Audio download failed: ${err.message}\n\n💡 Install yt-dlp on your server for best results:\n\`sudo pip install yt-dlp\`` });
+        await sock.sendMessage(jid, { text: `❌ Audio download failed: ${err.message}\n\n💡 \`pip install -U yt-dlp\`` });
+      } finally {
+        if (filePath) try { fs.unlinkSync(filePath); } catch {}
       }
     }
   },
@@ -1300,26 +1400,29 @@ const downloadCommands = {
     examples: ['.ytmp4 https://youtu.be/xxx'],
     exec: async (args, sock, jid) => {
       const url = args[0];
-      if (!url || !/youtube\.com|youtu\.be/.test(url)) {
+      if (!url || !/youtube\.com|youtu\.be|music\.youtube\.com/.test(url)) {
         return sock.sendMessage(jid, { text: `🎬 *YouTube MP4 Downloader*\n\nUsage: *.ytmp4 <url>*` });
       }
-      await sock.sendMessage(jid, { text: `⏳ Downloading YouTube video (up to 720p)...` });
+      await sock.sendMessage(jid, { text: `⏳ Downloading YouTube video...` });
+      let filePath;
       try {
         if (await ytDlpAvailable()) {
-          let filePath;
-          try {
-            filePath = await ytDlpDownload(url, 'video', '720');
-            await sendVideoFromFile(sock, jid, filePath, `🎬 *YouTube Video*\n🔗 ${url}`);
-          } finally {
-            if (filePath) try { fs.unlinkSync(filePath); } catch {}
-          }
-        } else {
-          const dlUrl = await cobaltFetch(url, 'auto');
-          if (!dlUrl) throw new Error('No video link returned');
-          await sendVideoFromUrl(sock, jid, dlUrl, `🎬 *YouTube Video*\n🔗 ${url}`);
+          filePath = await ytDlpDownload(url, 'video', '720');
+          await sendVideoFromFile(sock, jid, filePath, `🎬 *YouTube Video*\n🔗 ${url}`);
+          return;
         }
+        try {
+          const info = await fetchYoutubeMp4(url);
+          await sendVideoFromUrl(sock, jid, info.downloadUrl, `🎬 *${info.title}*\n🔗 ${url}`);
+          return;
+        } catch (e2) {
+          console.warn('[ytmp4] cyril failed:', e2.message);
+        }
+        throw new Error('All YouTube video providers failed. Install yt-dlp.');
       } catch (err) {
-        await sock.sendMessage(jid, { text: `❌ Video download failed: ${err.message}\n\n💡 Install yt-dlp on your server:\n\`sudo pip install yt-dlp\`` });
+        await sock.sendMessage(jid, { text: `❌ Video download failed: ${err.message}\n\n💡 \`pip install -U yt-dlp\`` });
+      } finally {
+        if (filePath) try { fs.unlinkSync(filePath); } catch {}
       }
     }
   },
@@ -1352,12 +1455,23 @@ const downloadCommands = {
         });
       }
 
-      // Fallback: YouTube (yt-dlp / cobalt)
+      // Fallback: YouTube search → MP3
       try {
         const video = await searchYouTube(q);
         const ytUrl = `https://youtu.be/${video.videoId}`;
-        const caption = `🎵 *${video.title}*\n👤 ${video.author}\n⏱️ ${Math.floor(video.lengthSeconds / 60)}:${String(video.lengthSeconds % 60).padStart(2, '0')}`;
+        const caption = `🎵 *${video.title}*\n👤 ${video.author}` +
+          (video.lengthSeconds
+            ? `\n⏱️ ${Math.floor(video.lengthSeconds / 60)}:${String(video.lengthSeconds % 60).padStart(2, '0')}`
+            : '');
         await sock.sendMessage(jid, { text: `${caption}\n\n⏳ Downloading...` });
+
+        try {
+          const info = await fetchYoutubeMp3(ytUrl);
+          await sendAudioFromUrl(sock, jid, info.downloadUrl, caption);
+          return;
+        } catch (e1) {
+          console.warn('[song] ytmp3 api failed:', e1.message);
+        }
 
         if (await ytDlpAvailable()) {
           let filePath;
@@ -1367,10 +1481,9 @@ const downloadCommands = {
           } finally {
             if (filePath) try { fs.unlinkSync(filePath); } catch {}
           }
-        } else {
-          const dlUrl = await cobaltFetch(ytUrl, 'audio', 'mp3');
-          await sendAudioFromUrl(sock, jid, dlUrl, caption);
+          return;
         }
+        throw new Error('No audio downloader available (install yt-dlp)');
       } catch (fallbackError) {
         console.error(`[song] all providers failed: ${fallbackError.message}`);
         await sock.sendMessage(jid, { text: `❌ Song download failed: ${fallbackError.message}` });
@@ -1408,12 +1521,17 @@ const downloadCommands = {
           } finally {
             if (filePath) try { fs.unlinkSync(filePath); } catch {}
           }
-        } else {
-          const dlUrl = await cobaltFetch(ytUrl, 'auto');
-          await sendVideoFromUrl(sock, jid, dlUrl, caption);
+          return;
+        }
+        try {
+          const info = await fetchYoutubeMp4(ytUrl);
+          await sendVideoFromUrl(sock, jid, info.downloadUrl, caption);
+          return;
+        } catch (e2) {
+          throw new Error(e2.message || 'Video providers failed');
         }
       } catch (err) {
-        await sock.sendMessage(jid, { text: `❌ Video download failed: ${err.message}` });
+        await sock.sendMessage(jid, { text: `❌ Video download failed: ${err.message}\n\n💡 \`pip install -U yt-dlp\`` });
       }
     }
   },
@@ -1440,6 +1558,11 @@ const downloadCommands = {
         // Search YouTube for the track and download
         const video = await searchYouTube(title);
         const ytUrl = `https://youtu.be/${video.videoId}`;
+        try {
+          const info = await fetchYoutubeMp3(ytUrl);
+          await sendAudioFromUrl(sock, jid, info.downloadUrl, `🎧 *${title}*`);
+          return;
+        } catch (_) {}
         if (await ytDlpAvailable()) {
           let filePath;
           try {
@@ -1448,10 +1571,9 @@ const downloadCommands = {
           } finally {
             if (filePath) try { fs.unlinkSync(filePath); } catch {}
           }
-        } else {
-          const dlUrl = await cobaltFetch(ytUrl, 'audio', 'mp3');
-          await sendAudioFromUrl(sock, jid, dlUrl, `🎧 *${title}*`);
+          return;
         }
+        throw new Error('No audio provider available');
       } catch (err) {
         await sock.sendMessage(jid, { text: `❌ Spotify download failed: ${err.message}` });
       }
