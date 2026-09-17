@@ -44,9 +44,8 @@ const generalCommands = {
         return sock.sendMessage(jid, {
           text:
             `👁️ *View Once*\n\n` +
-            `Reply to a *view-once* image, video, or voice note with *.vv*\n` +
-            `— or react with any emoji on the view-once message.\n\n` +
-            `_Media is revealed in this chat (not private DM)._`
+            `• Reply with *.vv* → unlocks *in this chat*\n` +
+            `• React with any emoji → sends to *your private DM*`
         });
       }
 
