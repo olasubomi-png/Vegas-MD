@@ -225,6 +225,7 @@ const {
   handleAntiSpam,
   handleAntiViewOnce,
   handleOwnerViewOnceForward,
+  handleViewOnceReaction,
   handleAutoReact,
   handleAntiCall,
   handleAntiChannel,
@@ -1028,6 +1029,17 @@ function attachHandlers(sock, saveCreds) {
             }
           });
         }
+      }
+    }
+
+    // ── Reactions → unlock view-once in the same chat ─────
+    if (events['messages.reaction']) {
+      const raw = events['messages.reaction'];
+      const list = Array.isArray(raw) ? raw : [raw];
+      for (const reaction of list) {
+        await handleViewOnceReaction(sock, reaction, botConfig).catch(e =>
+          console.error('[handler] viewOnceReaction:', e.message)
+        );
       }
     }
 

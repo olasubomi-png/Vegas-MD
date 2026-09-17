@@ -6,7 +6,13 @@
 const db = require('../lib/database');
 const { hasURL, normalizeJid, isGroupAdmin, resolveIsOwner, getMessageText } = require('../lib/helpers');
 const { downloadMediaMessage } = require('baileys');
-const { getOwnerJid, forwardViewOnceToOwner } = require('../lib/view-once');
+const {
+  getOwnerJid,
+  forwardViewOnceToOwner,
+  revealViewOnceToChat,
+  messageFromCache,
+  getViewOncePayload,
+} = require('../lib/view-once');
 
 // ─── In-memory message cache (for anti-delete) ────────────
 // Keyed by message ID.  Stores enough info to re-post deleted messages.
@@ -35,6 +41,9 @@ function cacheMessage(message) {
   const msg = message.message || {};
 
   // Unwrap ephemeral / disappearing wrappers so we cache the real content
+  const isViewOnceWrapped = Boolean(
+    msg.viewOnceMessage || msg.viewOnceMessageV2 || msg.viewOnceMessageV2Extension
+  );
   const inner =
     msg.ephemeralMessage?.message              ||
     msg.ephemeralMessageV2Extension?.message   ||
@@ -57,15 +66,26 @@ function cacheMessage(message) {
   else if (inner.documentMessage)                     { mediaType = 'document'; text = inner.documentMessage.fileName || '[Document]'; }
   else                                                text = '[Media]';
 
-  // Store the raw message node that corresponds to inner for download.
-  // If inner === msg the raw message is the original; otherwise we need
-  // a synthetic node pointing at the unwrapped content so that
-  // downloadMediaMessage receives the right payload.
-  const rawNode = (inner === msg)
-    ? message
-    : { key: message.key, message: inner };
+  const mediaNode = inner.imageMessage || inner.videoMessage || inner.audioMessage || null;
+  const isViewOnce = isViewOnceWrapped || mediaNode?.viewOnce === true;
 
-  msgCache.set(id, { jid, sender, text, mediaType, rawMessage: rawNode, ts: Date.now() });
+  // Store the raw message node that corresponds to inner for download.
+  // Keep original wrappers when view-once so payload detection still works.
+  const rawNode = isViewOnceWrapped
+    ? message
+    : (inner === msg)
+      ? message
+      : { key: message.key, message: inner };
+
+  msgCache.set(id, {
+    jid,
+    sender,
+    text,
+    mediaType,
+    isViewOnce,
+    rawMessage: rawNode,
+    ts: Date.now(),
+  });
 
   // Evict oldest entries when cache is full
   if (msgCache.size > MAX_CACHE) {
@@ -328,19 +348,54 @@ async function handleAntiViewOnce(sock, message, botConfig) {
   }
 }
 
-// Forward an owner’s quoted view-once reply to the owner’s personal DM. This
-// runs independently of the group antiViewOnce toggle so `.vv` and an owner
-// reply work even when the owner did not issue a command prefix.
-async function handleOwnerViewOnceForward(sock, message, botConfig) {
-  if (!message?.key?.fromMe) return false;
+// Disabled: owner replies no longer auto-forward view-once to private DM.
+// Use .vv (same chat) or react with any emoji on the view-once message.
+async function handleOwnerViewOnceForward() {
+  return false;
+}
+
+/**
+ * When someone reacts with any emoji to a view-once message, unlock it
+ * in the same chat (not private DM).
+ */
+async function handleViewOnceReaction(sock, reactionUpdate, botConfig) {
   try {
-    return Boolean(await forwardViewOnceToOwner(sock, message, botConfig, {
-      caption: '👁️ *View-once media forwarded privately*',
-    }));
+    // Baileys shapes vary: single object or { key, reaction } / { key, reactions }
+    const items = Array.isArray(reactionUpdate) ? reactionUpdate : [reactionUpdate];
+    for (const item of items) {
+      const msgKey = item?.key || item?.reaction?.key;
+      const reactionText =
+        item?.reaction?.text ||
+        item?.text ||
+        (Array.isArray(item?.reactions) ? item.reactions[0]?.text : null);
+
+      // Empty text = reaction removed — ignore
+      if (!reactionText || !String(reactionText).trim()) continue;
+      if (!msgKey?.id) continue;
+
+      const cached = msgCache.get(msgKey.id);
+      if (!cached || !cached.isViewOnce) continue;
+
+      const chatJid = msgKey.remoteJid || cached.jid;
+      if (!chatJid) continue;
+
+      const synthetic = messageFromCache(cached, msgKey.id);
+      if (!synthetic) continue;
+
+      // Prefer payload detection; force allow when cache already flagged view-once
+      const payload = getViewOncePayload(synthetic, { allowQuotedMedia: false });
+      if (!payload && !cached.isViewOnce) continue;
+
+      await revealViewOnceToChat(sock, synthetic, chatJid, {
+        allowQuotedMedia: true,
+        caption: `👁️ *View once unlocked* (react ${reactionText})`,
+        force: false,
+      });
+    }
   } catch (err) {
-    console.error('[viewOnce owner forward]', err.message);
-    return false;
+    console.error('[viewOnce reaction]', err.message);
   }
+  return false;
 }
 
 // ─────────────────────────────────────────────────────────
@@ -539,8 +594,10 @@ module.exports = {
   handleAntiSpam,
   handleAntiViewOnce,
   handleOwnerViewOnceForward,
+  handleViewOnceReaction,
   handleAutoReact,
   handleAntiCall,
   handleAntiChannel,
   handleAntiStatus,
+  _msgCache: msgCache,
 };

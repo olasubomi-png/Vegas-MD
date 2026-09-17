@@ -3,7 +3,7 @@
 const db = require('../lib/database');
 const { resolveIsOwner, normalizeJid } = require('../lib/helpers');
 const { downloadMediaMessage } = require('baileys');
-const { getOwnerJid, forwardViewOnceToOwner } = require('../lib/view-once');
+const { revealViewOnceToChat } = require('../lib/view-once');
 const repoInternals = require('./repo')._internals;
 
 // Extract contextInfo from any message type in Baileys v7.
@@ -27,52 +27,47 @@ function getCtx(message) {
 const generalCommands = {
 
   // ── .vv  ────────────────────────────────────────────────
-  // Reveals a view-once image or video by downloading + re-sending it.
-  //
-  // ROOT CAUSE OF "not a view-once message" BUG:
-  //   1. contextInfo only checked in extendedTextMessage — but the user's
-  //      reply might be any message type (image, video, sticker …).
-  //   2. In Baileys v7, the viewOnce wrapper is stripped in quotedMessage
-  //      for some WhatsApp clients, exposing imageMessage/videoMessage directly.
-  //   Both cases are now handled.
+  // Reveal view-once media IN THE SAME CHAT (not owner DM).
+  // You can also react with any emoji on a view-once message to unlock it.
   vv: {
     category:    'owner',
-    desc:        'Reveal a view-once image, video, or voice note (reply to it)',
+    desc:        'Reveal a view-once image/video/voice in this chat (reply to it)',
     usage:       '.vv',
     aliases:     ['viewonce', 'vv2', 'vv3'],
     permissions: 'all',
     examples:    ['.vv (reply to a view-once message)'],
-    exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
+    exec: async (args, sock, jid, isGroup, sender, message) => {
       const ctx = getCtx(message);
       const quoted = ctx?.quotedMessage;
 
       if (!quoted) {
         return sock.sendMessage(jid, {
-          text: `👁️ *View Once Revealer*\n\nReply to a *view-once* image or video with *.vv* to reveal it.`
-        });
-      }
-
-      const ownerJid = getOwnerJid(botConfig);
-      if (!ownerJid) {
-        return sock.sendMessage(jid, {
-          text: '❌ The owner DM target is not configured, so the view-once media was not forwarded.'
+          text:
+            `👁️ *View Once*\n\n` +
+            `Reply to a *view-once* image, video, or voice note with *.vv*\n` +
+            `— or react with any emoji on the view-once message.\n\n` +
+            `_Media is revealed in this chat (not private DM)._`
         });
       }
 
       try {
-        const forwarded = await forwardViewOnceToOwner(sock, message, botConfig, {
+        const revealed = await revealViewOnceToChat(sock, message, jid, {
           allowQuotedMedia: true,
-          caption: '👁️ *View-once media forwarded privately*',
+          caption: '👁️ *View once unlocked*',
         });
-        if (!forwarded) {
+        if (!revealed) {
           return sock.sendMessage(jid, {
-            text: `❌ The replied message doesn't contain a view-once image, video, or voice note.\n\n_Make sure you are replying directly to the view-once message._`
+            text:
+              `❌ That reply is not a view-once image, video, or voice note.\n\n` +
+              `_Reply directly to the view-once message, or react to it with an emoji._`
           });
         }
       } catch (dlErr) {
-        console.error('[vv] private forwarding failed:', dlErr.message);
+        console.error('[vv] reveal failed:', dlErr.message);
         await sock.sendMessage(jid, {
-          text: `❌ Could not download the view-once media.\n\n_The media may have expired or been deleted from WhatsApp's servers._`
+          text:
+            `❌ Could not unlock the view-once media.\n\n` +
+            `_It may have expired or been deleted from WhatsApp's servers._`
         });
       }
     }
