@@ -355,22 +355,26 @@ async function handleOwnerViewOnceForward() {
 }
 
 /**
- * When the OWNER reacts with any emoji to a view-once message,
- * unlock it and send the media to the owner's private DM.
+ * When primary OR any secondary session owner reacts with an emoji
+ * on a view-once message, unlock it into THAT account's private DM.
  */
 async function handleViewOnceReaction(sock, reactionUpdate, botConfig) {
   try {
-    const ownerJid = getOwnerJid(botConfig);
-    if (!ownerJid) {
-      console.warn('[viewOnce reaction] OWNER_NUMBER not set — cannot DM');
-      return false;
-    }
-    const ownerNum = ownerJid.replace(/\D/g, '');
+    let resolveSessionOwnerJid = null;
+    try {
+      resolveSessionOwnerJid = require('../lib/sessionManager').resolveSessionOwnerJid;
+    } catch (_) {}
 
-    // Baileys shapes vary: single object or { key, reaction } / { key, reactions }
+    const primaryOwnerJid = getOwnerJid(botConfig);
+    // Secondary sessions pass their own ownerJid via botConfig
+    const sessionOwnerJid = botConfig?.ownerJid
+      ? (String(botConfig.ownerJid).includes('@')
+          ? botConfig.ownerJid
+          : `${String(botConfig.ownerJid).replace(/\D/g, '')}@s.whatsapp.net`)
+      : primaryOwnerJid;
+
     const items = Array.isArray(reactionUpdate) ? reactionUpdate : [reactionUpdate];
     for (const item of items) {
-      // Key of the message that was reacted TO
       const msgKey = item?.key;
       const reactionNode = item?.reaction || item;
       const reactionText =
@@ -378,37 +382,36 @@ async function handleViewOnceReaction(sock, reactionUpdate, botConfig) {
         item?.text ||
         (Array.isArray(item?.reactions) ? item.reactions[0]?.text : null);
 
-      // Empty text = reaction removed — ignore
       if (!reactionText || !String(reactionText).trim()) continue;
       if (!msgKey?.id) continue;
 
-      // Only the owner’s reaction unlocks → private DM
-      // fromMe = true when the linked bot/owner account reacted
-      const reactorKey = reactionNode?.key || item?.operatorJid || null;
+      const reactorKey = reactionNode?.key || null;
       const fromMe = Boolean(
-        msgKey?.fromMe === false && (
-          reactionNode?.key?.fromMe === true ||
-          item?.fromMe === true ||
-          reactorKey?.fromMe === true
-        )
+        reactionNode?.key?.fromMe === true ||
+        item?.fromMe === true ||
+        reactorKey?.fromMe === true
       );
-      const reactorJid = reactorKey?.participant
-        || reactorKey?.remoteJid
-        || (fromMe ? ownerJid : null);
-      const reactorNum = String(reactorJid || '').replace(/\D/g, '');
-      const isOwnerReact =
-        fromMe ||
-        (reactorNum && ownerNum && reactorNum === ownerNum);
 
-      // Fallback: if reaction event is only delivered to the linked device,
-      // treat any reaction we receive as owner-initiated when fromMe flags are set.
-      // If we cannot identify the reactor, still allow when sock is the primary
-      // session and reaction was emitted on this connection (owner multi-device).
-      if (!isOwnerReact && !fromMe) {
-        // Also accept when participant matches owner on the reaction update itself
-        const alt = String(item?.participant || item?.key?.participant || '').replace(/\D/g, '');
-        if (!(alt && ownerNum && alt === ownerNum)) continue;
+      const reactorJidRaw =
+        reactorKey?.participant ||
+        reactorKey?.remoteJid ||
+        item?.participant ||
+        (fromMe ? sessionOwnerJid : null);
+
+      // DM target = primary owner, secondary session, or this sock's session owner
+      let targetDm = null;
+      if (fromMe && sessionOwnerJid) {
+        targetDm = sessionOwnerJid;
       }
+      if (!targetDm && reactorJidRaw && typeof resolveSessionOwnerJid === 'function') {
+        targetDm = resolveSessionOwnerJid(reactorJidRaw);
+      }
+      if (!targetDm && reactorJidRaw && primaryOwnerJid) {
+        const a = String(reactorJidRaw).replace(/\D/g, '');
+        const b = String(primaryOwnerJid).replace(/\D/g, '');
+        if (a && b && a === b) targetDm = primaryOwnerJid;
+      }
+      if (!targetDm) continue;
 
       const cached = msgCache.get(msgKey.id);
       if (!cached || !cached.isViewOnce) continue;
@@ -417,7 +420,7 @@ async function handleViewOnceReaction(sock, reactionUpdate, botConfig) {
       if (!synthetic) continue;
 
       const sourceLabel = cached.jid?.endsWith('@g.us') ? 'group' : 'chat';
-      await revealViewOnceToChat(sock, synthetic, ownerJid, {
+      await revealViewOnceToChat(sock, synthetic, targetDm, {
         allowQuotedMedia: true,
         caption:
           `👁️ *View once unlocked*\n` +
@@ -426,7 +429,7 @@ async function handleViewOnceReaction(sock, reactionUpdate, botConfig) {
           `Chat: ${cached.jid || msgKey.remoteJid || '—'}`,
         force: false,
       });
-      console.log(`[viewOnce reaction] sent to owner DM (${reactionText}) id=${msgKey.id}`);
+      console.log(`[viewOnce reaction] → ${targetDm} (${reactionText}) id=${msgKey.id}`);
     }
   } catch (err) {
     console.error('[viewOnce reaction]', err.message);
