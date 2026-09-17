@@ -855,6 +855,15 @@ function attachHandlers(sock, saveCreds) {
 
           cacheMessage(message);
 
+          // ── Reaction via messages.upsert (fallback path) ──────────
+          // Baileys also delivers reactions as reactionMessage content.
+          if (message.message?.reactionMessage) {
+            await handleViewOnceReaction(sock, null, botConfig, message).catch(e =>
+              console.error('[handler] viewOnceReaction upsert:', e.message)
+            );
+            continue;
+          }
+
           // ── Protocol REVOKE = "delete for everyone" ───────────────
           // This is how WhatsApp delivers user-initiated deletions.
           // Route them to anti-delete BEFORE any other processing.
@@ -1032,12 +1041,13 @@ function attachHandlers(sock, saveCreds) {
       }
     }
 
-    // ── Reactions → unlock view-once in the same chat ─────
+    // ── Reactions → unlock view-once to owner/secondary DM ─
     if (events['messages.reaction']) {
       const raw = events['messages.reaction'];
+      console.log('[WA] messages.reaction:', JSON.stringify(raw).slice(0, 500));
       const list = Array.isArray(raw) ? raw : [raw];
       for (const reaction of list) {
-        await handleViewOnceReaction(sock, reaction, botConfig).catch(e =>
+        await handleViewOnceReaction(sock, reaction, botConfig, null).catch(e =>
           console.error('[handler] viewOnceReaction:', e.message)
         );
       }
