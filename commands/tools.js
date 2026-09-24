@@ -516,21 +516,146 @@ const toolsCommands = {
   },
 
   toimg: {
-    category: 'sticker', desc: 'Convert a sticker to an image (reply to sticker)',
-    usage: '.toimg', aliases: [], permissions: 'all',
-    examples: ['.toimg (reply to a sticker)'],
+    category: 'sticker',
+    desc: 'Convert a sticker to a normal picture (reply to sticker)',
+    usage: '.toimg',
+    aliases: ['stoimg', 'stickertoimg', 'sticker2img', 'topng', 'sticker2pic'],
+    permissions: 'all',
+    examples: ['.toimg (reply to a sticker)', '.stoimg (reply to a sticker)'],
     exec: async (args, sock, jid, isGroup, sender, message) => {
       const ctx    = getCtx(message);
       const quoted = ctx?.quotedMessage;
-      if (!quoted?.stickerMessage) {
-        return sock.sendMessage(jid, { text: `🖼️ *Sticker → Image*\n\nReply to a *sticker* with *.toimg*.` });
+      const stickerMsg = quoted?.stickerMessage || message?.message?.stickerMessage;
+
+      if (!stickerMsg) {
+        return sock.sendMessage(jid, {
+          text:
+            `🖼️ *Sticker → Picture*\n\n` +
+            `Reply to a *sticker* with *.toimg*\n\n` +
+            `Aliases: .stoimg .topng .sticker2pic`
+        });
       }
-      await sock.sendMessage(jid, { text: `🖼️ Converting...` });
+
+      await sock.sendMessage(jid, { text: `🖼️ Converting sticker to picture...` });
+
       try {
-        const buf = await dlQuoted(sock, jid, message, quoted);
-        await sock.sendMessage(jid, { image: buf, caption: `🖼️ *Here's your image!*`, mimetype: 'image/webp' });
+        // Download sticker buffer (try multiple strategies like AI image download)
+        let buf = null;
+        const { downloadContentFromMessage, downloadMediaMessage } = require('baileys');
+
+        // Strategy 1: downloadContentFromMessage on stickerMessage
+        try {
+          const stream = await downloadContentFromMessage(stickerMsg, 'sticker');
+          const chunks = [];
+          for await (const chunk of stream) chunks.push(chunk);
+          buf = Buffer.concat(chunks);
+          if (buf.length < 50) buf = null;
+        } catch (e1) {
+          console.warn('[toimg] content stream failed:', e1.message);
+        }
+
+        // Strategy 2: dlQuoted / downloadMediaMessage with fromMe true & false
+        if (!buf && quoted?.stickerMessage) {
+          for (const fromMe of [false, true]) {
+            try {
+              const fake = {
+                key: {
+                  remoteJid: jid,
+                  id: ctx?.stanzaId || message.key?.id,
+                  participant: ctx?.participant || message.key?.participant,
+                  fromMe
+                },
+                message: quoted
+              };
+              const b = await downloadMediaMessage(fake, 'buffer', {
+                reuploadRequest: sock.updateMediaMessage
+              });
+              if (b && b.length > 50) { buf = b; break; }
+            } catch (e2) {
+              console.warn(`[toimg] downloadMediaMessage fromMe=${fromMe} failed:`, e2.message);
+            }
+          }
+        }
+
+        // Strategy 3: direct sticker on current message
+        if (!buf && message?.message?.stickerMessage) {
+          try {
+            const fake = { key: message.key, message: message.message };
+            buf = await downloadMediaMessage(fake, 'buffer', {
+              reuploadRequest: sock.updateMediaMessage
+            });
+          } catch (e3) {
+            console.warn('[toimg] direct download failed:', e3.message);
+          }
+        }
+
+        if (!buf || !Buffer.isBuffer(buf) || buf.length < 50) {
+          throw new Error('Could not download the sticker from WhatsApp');
+        }
+
+        console.log(`[toimg] downloaded ${buf.length} bytes`);
+
+        // Convert WebP → JPEG (most reliable for WhatsApp photos)
+        let outBuf = null;
+        let mime = 'image/jpeg';
+        const inFile  = tmpFile('.webp');
+        const jpgFile = tmpFile('.jpg');
+        const pngFile = tmpFile('.png');
+        fs.writeFileSync(inFile, buf);
+
+        try {
+          await ffmpegRun(inFile, jpgFile, [
+            '-frames:v', '1',
+            '-vf', 'scale=iw:ih:flags=lanczos',
+            '-q:v', '2',
+            '-pix_fmt', 'yuvj420p'
+          ]);
+          const jpg = fs.readFileSync(jpgFile);
+          if (jpg && jpg.length > 200) {
+            outBuf = jpg;
+            mime = 'image/jpeg';
+          }
+        } catch (e) {
+          console.warn('[toimg] jpeg convert failed:', e.message);
+        }
+
+        if (!outBuf) {
+          try {
+            await ffmpegRun(inFile, pngFile, [
+              '-frames:v', '1',
+              '-vf', 'scale=iw:ih:flags=lanczos'
+            ]);
+            const png = fs.readFileSync(pngFile);
+            if (png && png.length > 200) {
+              outBuf = png;
+              mime = 'image/png';
+            }
+          } catch (e) {
+            console.warn('[toimg] png convert failed:', e.message);
+          }
+        }
+
+        for (const f of [inFile, jpgFile, pngFile]) {
+          try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch {}
+        }
+
+        // Last resort: send original webp as image
+        if (!outBuf) {
+          outBuf = buf;
+          mime = 'image/webp';
+        }
+
+        await sock.sendMessage(jid, {
+          image: outBuf,
+          caption: `🖼️ *Sticker converted to picture!*`,
+          mimetype: mime
+        });
       } catch (err) {
-        await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
+        console.error('[toimg] error:', err);
+        const msg = String(err?.message || err).slice(0, 250);
+        await sock.sendMessage(jid, {
+          text: `❌ Conversion failed: ${msg}`
+        });
       }
     }
   },
