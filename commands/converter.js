@@ -63,24 +63,49 @@ async function uploadToCatbox(buffer, filename, mimetype) {
   return text.trim();
 }
 
-// Convert sticker (webp) buffer → PNG buffer using ffmpeg
-async function stickerToPng(webpBuf) {
+
+// Convert sticker (webp) buffer → JPEG or PNG using ffmpeg (JPEG preferred for WhatsApp)
+async function stickerToImage(webpBuf) {
   const inFile  = tmpFile('.webp');
-  const outFile = tmpFile('.png');
+  const jpgFile = tmpFile('.jpg');
+  const pngFile = tmpFile('.png');
   fs.writeFileSync(inFile, webpBuf);
+
+  // Prefer JPEG (WhatsApp handles it best as a normal photo)
   try {
-    // -frames:v 1 takes first frame if animated
-    await ffmpegRun(inFile, outFile, [
+    await ffmpegRun(inFile, jpgFile, [
       '-frames:v', '1',
       '-vf', 'scale=iw:ih:flags=lanczos',
-      '-pix_fmt', 'rgba'
+      '-q:v', '2',
+      '-pix_fmt', 'yuvj420p'
     ]);
-    return fs.readFileSync(outFile);
-  } finally {
-    for (const f of [inFile, outFile]) {
-      try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch {}
+    const jpg = fs.readFileSync(jpgFile);
+    if (jpg && jpg.length > 200) {
+      for (const f of [inFile, jpgFile, pngFile]) try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch {}
+      return { buffer: jpg, mimetype: 'image/jpeg' };
     }
+  } catch (e) {
+    console.warn('[toimg] jpeg convert failed:', e.message);
   }
+
+  // Fallback PNG
+  try {
+    await ffmpegRun(inFile, pngFile, [
+      '-frames:v', '1',
+      '-vf', 'scale=iw:ih:flags=lanczos'
+    ]);
+    const png = fs.readFileSync(pngFile);
+    if (png && png.length > 200) {
+      for (const f of [inFile, jpgFile, pngFile]) try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch {}
+      return { buffer: png, mimetype: 'image/png' };
+    }
+  } catch (e) {
+    console.warn('[toimg] png convert failed:', e.message);
+  }
+
+  for (const f of [inFile, jpgFile, pngFile]) try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch {}
+  // Last resort: original webp
+  return { buffer: webpBuf, mimetype: 'image/webp' };
 }
 
 // ── commands ──────────────────────────────────────────────────────────────
@@ -96,15 +121,17 @@ const converterCommands = {
     exec: async (args, sock, jid, isGroup, sender, message) => {
       const ctx    = getCtx(message);
       const quoted = ctx?.quotedMessage;
-
-      // Also accept sticker sent directly (not only reply)
       const stickerMsg = quoted?.stickerMessage || message?.message?.stickerMessage;
 
       if (!stickerMsg) {
         return sock.sendMessage(jid, {
           text:
-            `🖼️ *Sticker → Picture*\n\n` +
-            `Reply to a *sticker* with *.toimg* to convert it into a normal image.\n\n` +
+            `🖼️ *Sticker → Picture*
+
+` +
+            `Reply to a *sticker* with *.toimg* to convert it into a normal image.
+
+` +
             `Aliases: \`.stoimg\` \`.stickertoimg\` \`.topng\` \`.sticker2pic\``
         });
       }
@@ -112,35 +139,33 @@ const converterCommands = {
       await sock.sendMessage(jid, { text: `🖼️ Converting sticker to picture...` });
 
       try {
-        // Prefer quoted sticker; fall back to direct sticker message
         let buf;
         if (quoted?.stickerMessage) {
           buf = await dlQuoted(sock, jid, message, quoted);
         } else {
-          // Direct sticker (rare, but support it)
           const fake = { key: message.key, message: message.message };
           buf = await downloadMediaMessage(fake, 'buffer', { reuploadRequest: sock.updateMediaMessage });
         }
 
-        if (!buf || !buf.length) throw new Error('Could not download the sticker');
-
-        // Convert WebP → PNG so WhatsApp treats it as a regular photo
-        let pngBuf;
-        try {
-          pngBuf = await stickerToPng(buf);
-        } catch (convErr) {
-          console.warn('[toimg] ffmpeg convert failed, sending original webp:', convErr.message);
-          // Fallback: send original buffer as image
-          pngBuf = buf;
+        if (!buf || !Buffer.isBuffer(buf) || buf.length < 50) {
+          throw new Error('Could not download the sticker (empty buffer)');
         }
 
+        const { buffer: imgBuf, mimetype } = await stickerToImage(buf);
+
         await sock.sendMessage(jid, {
-          image:    pngBuf,
-          caption:  `🖼️ *Sticker converted to picture!*`,
-          mimetype: 'image/png'
+          image: imgBuf,
+          caption: `🖼️ *Sticker converted to picture!*`,
+          mimetype
         });
       } catch (err) {
-        await sock.sendMessage(jid, { text: `❌ Conversion failed: ${err.message}` });
+        console.error('[toimg] error:', err);
+        const msg = String(err?.message || err).slice(0, 250);
+        await sock.sendMessage(jid, {
+          text: `❌ Conversion failed: ${msg}
+
+_Tip: Make sure ffmpeg is installed on the server._`
+        });
       }
     }
   },
