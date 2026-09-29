@@ -906,7 +906,7 @@ function attachHandlers(sock, saveCreds) {
           }
 
           // ── Auto-Read: mark incoming messages as read when enabled ──
-          if (!isFromMe && db.getOwnerSetting(botConfig.ownerJid, 'autoRead', false)) {
+          if (!isFromMe && (db.getOwnerSetting(botConfig.ownerJid, 'autoRead', false) || db.getSetting('autoRead', false))) {
             sock.readMessages([message.key]).catch(e =>
               console.error('[handler] autoRead:', e.message)
             );
@@ -1024,7 +1024,7 @@ function attachHandlers(sock, saveCreds) {
           console.log(`[WA] dispatching .${command} to handleCommand (sock#${sockId})`);
 
           // ── Auto-Typing: show a typing indicator while a command runs ──
-          if (db.getOwnerSetting(botConfig.ownerJid, 'autoTyping', false)) {
+          if ((db.getOwnerSetting(botConfig.ownerJid, 'autoTyping', false) || db.getSetting('autoTyping', false))) {
             sock.sendPresenceUpdate('composing', jid).catch(e =>
               console.error('[handler] autoTyping:', e.message)
             );
@@ -1033,7 +1033,7 @@ function attachHandlers(sock, saveCreds) {
           handleCommand(command, parts, message, sock, botConfig).catch(err =>
             console.error(`[cmd] .${command} unhandled exception:\n${err.stack || err.message}`)
           ).finally(() => {
-            if (db.getOwnerSetting(botConfig.ownerJid, 'autoTyping', false)) {
+            if ((db.getOwnerSetting(botConfig.ownerJid, 'autoTyping', false) || db.getSetting('autoTyping', false))) {
               sock.sendPresenceUpdate('paused', jid).catch(() => {});
             }
           });

@@ -179,7 +179,7 @@ const ownerCommands = {
     category: 'owner',
     desc: 'Owner: toggle global auto-status on/off. Anyone in DM: toggle auto-view of your own status updates.',
     usage: '.autostatus [on|off]',
-    aliases: [],
+    aliases: ['as', 'autoviewstatus', 'viewstatus'],
     permissions: 'all',
     examples: ['.autostatus on', '.autostatus off', '.autostatus'],
     exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
@@ -197,7 +197,9 @@ const ownerCommands = {
         }
         const v = sub === 'on';
         db.setOwnerSetting(botConfig?.ownerJid, 'autoStatus', v);
-        return sock.sendMessage(jid, { text: `👁️ Auto-Status: ${v ? '✅ Enabled' : '❌ Disabled'}` });
+        // Also write global setting so events/autoStatus.js always sees it
+        db.setSetting('autoStatus', v);
+        return sock.sendMessage(jid, { text: `👁️ Auto-Status: ${v ? '✅ Enabled' : '❌ Disabled'}\n\n_Bot will auto-view contacts\' status updates._` });
       }
 
       // ── Non-owner in a group ───────────────────────────────────
@@ -239,8 +241,10 @@ const ownerCommands = {
       }
       const v = sub === 'on';
       db.setOwnerSetting(ownerJid, 'autoStatusReact', v);
+      db.setSetting('autoStatusReact', v);
       if (v && !db.getOwnerSetting(ownerJid, 'autoStatus', false)) {
         db.setOwnerSetting(ownerJid, 'autoStatus', true);
+        db.setSetting('autoStatus', true);
         await sock.sendMessage(jid, {
           text:
             `❤️ Auto-Status React: ✅ Enabled\n` +
@@ -267,14 +271,17 @@ const ownerCommands = {
       }
       const v = sub === 'on';
       db.setOwnerSetting(ownerJid, 'autoRead', v);
+      db.setSetting('autoRead', v);
       await sock.sendMessage(jid, { text: `📖 Auto-Read: ${v ? '✅ Enabled' : '❌ Disabled'}` });
     })
   },
 
   autotyping: {
     category: 'owner', desc: 'Turn auto-typing indicator when processing commands on/off',
-    usage: '.autotyping <on|off>', aliases: [], permissions: 'owner',
-    examples: ['.autotyping on', '.autotyping off'],
+    usage: '.autotyping <on|off>',
+    aliases: ['autotype', 'atype', 'typing'],
+    permissions: 'owner',
+    examples: ['.autotyping on', '.autotype on', '.autotyping off'],
     exec: ownerOnly(async (args, sock, jid, isGroup, sender, message, botConfig) => {
       const ownerJid = botConfig?.ownerJid;
       const sub = (args[0] || '').toLowerCase();
@@ -286,7 +293,10 @@ const ownerCommands = {
       }
       const v = sub === 'on';
       db.setOwnerSetting(ownerJid, 'autoTyping', v);
-      await sock.sendMessage(jid, { text: `⌨️ Auto-Typing: ${v ? '✅ Enabled' : '❌ Disabled'}` });
+      db.setSetting('autoTyping', v);
+      await sock.sendMessage(jid, {
+        text: `⌨️ Auto-Typing: ${v ? '✅ Enabled' : '❌ Disabled'}\n\n_Bot will show typing indicator while processing commands._`
+      });
     })
   },
 
