@@ -91,6 +91,7 @@ const ownerCommands = {
       if (global.botConfig && botConfig === global.botConfig) global.botConfig.mode = m;
       // Persist per-owner so each session is independent
       db.setOwnerSetting(botConfig?.ownerJid, 'mode', m);
+      db.setSetting('mode', m);
       await sock.sendMessage(jid, { text: `✅ Bot mode set to *${m}*` });
     })
   },
@@ -107,6 +108,7 @@ const ownerCommands = {
       if (botConfig) botConfig.mode = m;
       if (global.botConfig && botConfig === global.botConfig) global.botConfig.mode = m;
       db.setOwnerSetting(botConfig?.ownerJid, 'mode', m);
+      db.setSetting('mode', m);
       await sock.sendMessage(jid, { text: `✅ Bot mode set to *${m}*` });
     })
   },
@@ -123,6 +125,7 @@ const ownerCommands = {
       if (botConfig) botConfig.prefix = prefix;
       if (global.botConfig && botConfig === global.botConfig) global.botConfig.prefix = prefix;
       db.setOwnerSetting(botConfig?.ownerJid, 'prefix', prefix);
+      db.setSetting('prefix', prefix);
       await sock.sendMessage(jid, { text: `✅ Prefix changed to *${prefix}*\n\nNew command: *${prefix}menu*` });
     })
   },
@@ -324,10 +327,12 @@ const ownerCommands = {
       }
       const enabled = sub === 'on';
       db.setOwnerSetting(ownerJid, 'freeChat', enabled);
+      db.setSetting('freeChat', enabled);
       // The primary switch now represents the requested public free-chat mode:
       // both direct messages and groups may receive natural replies. Owners can
       // still use `.freechatgroups off` afterwards when they need DM-only chat.
       db.setOwnerSetting(ownerJid, 'freeChatGroups', enabled);
+      db.setSetting('freeChatGroups', enabled);
       return sock.sendMessage(jid, {
         text: enabled
           ? '💬 *Free Chat enabled for everyone.* I will answer only when someone *tags the bot* in an enabled chat.\n\nUse *.freechatgroups off* any time to block tagged group replies.'
@@ -353,6 +358,7 @@ const ownerCommands = {
       }
       const enabled = sub === 'on';
       db.setOwnerSetting(ownerJid, 'freeChatGroups', enabled);
+      db.setSetting('freeChatGroups', enabled);
       return sock.sendMessage(jid, {
         text: `👥 Free-chat group replies: *${enabled ? 'ON ✅' : 'OFF ❌'}*\n\nFree Chat itself must also be enabled with *.freechat on*.`
       });
@@ -479,6 +485,7 @@ const ownerCommands = {
         // ── Owner in DM: toggle per-session anti-delete setting ───
         const v = !db.getOwnerSetting(botConfig?.ownerJid, 'antiDelete', false);
         db.setOwnerSetting(botConfig?.ownerJid, 'antiDelete', v);
+        db.setSetting('antiDelete', v);
         return sock.sendMessage(jid, {
           text:
             `🗑️ *Anti-Delete: ${v ? '✅ Enabled' : '❌ Disabled'}*\n\n` +

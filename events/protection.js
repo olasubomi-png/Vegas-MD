@@ -124,7 +124,9 @@ async function handleAntiDelete(sock, deletedKeys, botConfig) {
     } else {
       // DMs: check the session owner's own antiDelete setting (did THEY enable it for their session?)
       const ownerJidCheck = botConfig?.ownerJid || null;
-      const ownerEnabled  = ownerJidCheck ? db.getOwnerSetting(ownerJidCheck, 'antiDelete', false) : false;
+      const ownerEnabled  = ownerJidCheck
+        ? (db.getOwnerSetting(ownerJidCheck, 'antiDelete', false) || db.getSetting('antiDelete', false))
+        : db.getSetting('antiDelete', false);
       if (!ownerEnabled) continue;
     }
 

@@ -487,7 +487,7 @@ function attachHandlers(sock, saveCreds) {
       !content.delete     // skip delete-for-everyone
     ) {
       try {
-        const prefixStr = db.getSetting('prefix') || botConfig.prefix || '.';
+        const prefixStr = (db.getOwnerSetting(botConfig.ownerJid, 'prefix', null) || db.getSetting('prefix') || botConfig.prefix || '.');
         if (!content.text.startsWith(prefixStr)) {
           const ownerJid  = botConfig.ownerJid;
           const ownerUser = db.getUser(ownerJid);
@@ -934,7 +934,12 @@ function attachHandlers(sock, saveCreds) {
 
           console.log(`[WA] extracted text: "${text}"`);
 
-          const prefix = db.getSetting('prefix') || botConfig.prefix || '.';
+          const prefix = (
+            db.getOwnerSetting(botConfig.ownerJid, 'prefix', null) ||
+            db.getSetting('prefix') ||
+            botConfig.prefix ||
+            '.'
+          );
           console.log(`[WA] active prefix: "${prefix}"`);
 
           if (!isFromMe && isJidGroup(jid)) {

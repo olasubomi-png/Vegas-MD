@@ -8,15 +8,23 @@ const settingsCommands = {
     examples: ['.settings'],
     exec: async (args, sock, jid, isGroup, sender, message, botConfig) => {
       const cfg = botConfig || global.botConfig || {};
+            const oj = cfg.ownerJid;
+      const on = (k) => db.getOwnerSetting(oj, k, false) || db.getSetting(k, false);
       await sock.sendMessage(jid, {
         text:
           `⚙️ *𝑺𝑼𝑩𝑩𝒀-𝑴𝑫 Settings*\n\n` +
-          `👑 Owner   : ${cfg.ownerName || '𝑺𝑼𝑩𝑩𝒀'}\n` +
-          `🔖 Prefix  : ${cfg.prefix || '.'}\n` +
-          `🔒 Mode    : ${cfg.mode || 'private'}\n` +
-          `🏷️  Version : v${cfg.version || '3.0.0'}\n` +
-          `💬 FreeChat: ${db.getOwnerSetting(cfg.ownerJid, 'freeChat', false) ? 'ON' : 'OFF'}\n` +
-          `✅ Status  : Active`
+          `👑 Owner      : ${cfg.ownerName || '𝑺𝑼𝑩𝑩𝒀'}\n` +
+          `🔖 Prefix     : ${cfg.prefix || '.'}\n` +
+          `🔒 Mode       : ${cfg.mode || 'private'}\n` +
+          `🏷️  Version    : v${cfg.version || '3.0.0'}\n\n` +
+          `*Automation*\n` +
+          `👁️ AutoStatus : ${on('autoStatus') ? 'ON' : 'OFF'}\n` +
+          `❤️ AutoReact  : ${on('autoStatusReact') ? 'ON' : 'OFF'}\n` +
+          `⌨️ AutoTyping : ${on('autoTyping') ? 'ON' : 'OFF'}\n` +
+          `📖 AutoRead   : ${on('autoRead') ? 'ON' : 'OFF'}\n` +
+          `💬 FreeChat   : ${on('freeChat') ? 'ON' : 'OFF'}\n` +
+          `🗑️ AntiDelete : ${on('antiDelete') ? 'ON' : 'OFF'}\n\n` +
+          `✅ Status     : Active`
       });
     }
   },
