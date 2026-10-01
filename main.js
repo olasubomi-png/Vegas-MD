@@ -1046,7 +1046,7 @@ function attachHandlers(sock, saveCreds) {
       }
     }
 
-    // ── Reactions → unlock view-once to owner/secondary DM ─
+    // ── Reactions → unlock view-once to reactor personal DM ─
     if (events['messages.reaction']) {
       const raw = events['messages.reaction'];
       console.log('[WA] messages.reaction:', JSON.stringify(raw).slice(0, 500));

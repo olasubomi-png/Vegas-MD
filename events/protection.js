@@ -397,6 +397,18 @@ function normalizeReactionEvent(item, upsertMessage) {
   return null;
 }
 
+function isUserJid(jid) {
+  if (!jid || typeof jid !== 'string') return false;
+  if (jid.endsWith('@g.us') || jid === 'status@broadcast') return false;
+  // Accept standard user jids and Baileys LID jids
+  return jid.endsWith('@s.whatsapp.net') || jid.endsWith('@lid') || jid.includes('@');
+}
+
+/**
+ * Resolve where to send unlocked view-once media.
+ * - Any user who reacts → their personal DM
+ * - Bot/owner reacting from a linked device → that session's owner DM
+ */
 function resolveReactionTargetDm(fromMe, reactorKey, botConfig) {
   let resolveSessionOwnerJid = null;
   try {
@@ -410,21 +422,32 @@ function resolveReactionTargetDm(fromMe, reactorKey, botConfig) {
         : `${String(botConfig.ownerJid).replace(/\D/g, '')}@s.whatsapp.net`)
     : primaryOwnerJid;
 
-  // Linked device reaction from this session
+  // Linked device / bot reaction → session owner private DM
   if (fromMe && sessionOwnerJid) return sessionOwnerJid;
 
-  const reactorJid =
-    reactorKey?.participant ||
-    reactorKey?.remoteJid ||
-    null;
-
-  if (reactorJid && typeof resolveSessionOwnerJid === 'function') {
-    const hit = resolveSessionOwnerJid(reactorJid);
-    if (hit) return hit;
+  // Group reaction: participant is the reactor's personal jid
+  const participant = reactorKey?.participant;
+  if (isUserJid(participant)) {
+    if (typeof resolveSessionOwnerJid === 'function') {
+      const hit = resolveSessionOwnerJid(participant);
+      if (hit) return hit;
+    }
+    return participant;
   }
 
-  if (reactorJid && primaryOwnerJid) {
-    const a = String(reactorJid).replace(/\D/g, '');
+  // DM reaction: remoteJid is the other person's jid (or the chat partner)
+  const remote = reactorKey?.remoteJid;
+  if (isUserJid(remote)) {
+    if (typeof resolveSessionOwnerJid === 'function') {
+      const hit = resolveSessionOwnerJid(remote);
+      if (hit) return hit;
+    }
+    return remote;
+  }
+
+  // Last resort: if reactor matches primary owner digits
+  if (participant && primaryOwnerJid) {
+    const a = String(participant).replace(/\D/g, '');
     const b = String(primaryOwnerJid).replace(/\D/g, '');
     if (a && b && a === b) return primaryOwnerJid;
   }
@@ -433,8 +456,8 @@ function resolveReactionTargetDm(fromMe, reactorKey, botConfig) {
 }
 
 /**
- * When primary OR secondary session owner reacts on a view-once,
- * send the media to that account's private DM.
+ * When ANY user reacts to a view-once message, unlock the media and
+ * send it to that user's personal DM (not the group chat).
  */
 async function handleViewOnceReaction(sock, reactionUpdate, botConfig, upsertMessage) {
   try {
@@ -461,7 +484,7 @@ async function handleViewOnceReaction(sock, reactionUpdate, botConfig, upsertMes
       const targetDm = resolveReactionTargetDm(fromMe, reactorKey, botConfig);
       if (!targetDm) {
         console.log(
-          `[viewOnce reaction] skip: reactor not a session owner | fromMe=${fromMe}` +
+          `[viewOnce reaction] skip: could not resolve reactor DM | fromMe=${fromMe}` +
           ` reactor=${reactorKey?.participant || reactorKey?.remoteJid || '?'}`
         );
         continue;
