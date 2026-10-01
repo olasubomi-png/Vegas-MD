@@ -85,20 +85,36 @@ function cacheMessage(message) {
       ? message
       : { key: message.key, message: inner };
 
-  msgCache.set(id, {
+  const entry = {
     jid,
     sender,
     text,
     mediaType,
     isViewOnce,
     rawMessage: rawNode,
+    keyId: id,
     ts: Date.now(),
-  });
+  };
+  msgCache.set(id, entry);
+  // Secondary index: chat+id (helps when reaction keys differ slightly)
+  if (jid) msgCache.set(`${jid}|${id}`, entry);
 
-  // Evict oldest entries when cache is full
-  if (msgCache.size > MAX_CACHE) {
-    const oldest = [...msgCache.entries()].sort((a, b) => a[1].ts - b[1].ts)[0];
-    if (oldest) msgCache.delete(oldest[0]);
+  // Evict oldest entries when cache is full (prefer keeping view-once longer)
+  if (msgCache.size > MAX_CACHE * 2) {
+    // size counts secondary keys too — evict by unique entries
+    const unique = new Map();
+    for (const [k, v] of msgCache.entries()) {
+      if (!unique.has(v.keyId || k)) unique.set(v.keyId || k, { k, v });
+    }
+    const sorted = [...unique.values()].sort((a, b) => a.v.ts - b.v.ts);
+    while (unique.size > MAX_CACHE && sorted.length) {
+      const old = sorted.shift();
+      if (!old) break;
+      if (old.v.isViewOnce && Date.now() - old.v.ts < 30 * 60 * 1000) continue; // keep recent VO
+      msgCache.delete(old.v.keyId);
+      if (old.v.jid) msgCache.delete(`${old.v.jid}|${old.v.keyId}`);
+      unique.delete(old.v.keyId);
+    }
   }
 }
 
@@ -368,10 +384,11 @@ async function handleOwnerViewOnceForward() {
  * Baileys emits messages.reaction as:
  *   { key: <message being reacted to>, reaction: { text, key: <reactor key> } }
  * Also handle reactionMessage inside messages.upsert as a fallback.
- * Baileys v6/v7 shapes vary — normalize all of them.
+ *
+ * POLICY: only the bot owner / linked session owner may unlock view-once
+ * via reaction. Other users' reactions are ignored (no DM spam).
  */
 function normalizeReactionEvent(item, upsertMessage) {
-  // Path B first if upsertMessage provided
   if (upsertMessage?.message?.reactionMessage) {
     const rm = upsertMessage.message.reactionMessage;
     return {
@@ -384,40 +401,33 @@ function normalizeReactionEvent(item, upsertMessage) {
 
   if (!item) return null;
 
-  // Path A: messages.reaction event item
-  // Shape 1: { key, reaction: { text, key } }
   if (item.reaction || item.key) {
     const reaction = item.reaction || {};
-    const targetKey = item.key || reaction.key || null;
-    // Prefer reaction.key as reactor identity when Baileys overwrote it
-    const reactorKey = reaction.key || item.reactorKey || item.participant || null;
+    // item.key = message being reacted TO
+    // reaction.key = reactor's key (Baileys overwrites this)
+    const targetKey = item.key || null;
+    const reactorKey = reaction.key || null;
     const text = reaction.text || item.text || '';
     return {
       targetKey,
-      reactorKey: reactorKey && typeof reactorKey === 'object' ? reactorKey : (item.key || null),
+      reactorKey,
       text: String(text || ''),
-      fromMe: Boolean(
-        (reactorKey && typeof reactorKey === 'object' && reactorKey.fromMe) ||
-        item.fromMe ||
-        false
-      ),
+      fromMe: Boolean(reactorKey?.fromMe || item.fromMe),
     };
   }
 
-  // Shape 2: nested array already flattened by caller
   return null;
 }
 
-function isUserJid(jid) {
-  if (!jid || typeof jid !== 'string') return false;
-  if (jid.endsWith('@g.us') || jid === 'status@broadcast' || jid.endsWith('@newsletter')) return false;
-  return true;
+function digitsOnly(jid) {
+  return String(jid || '').replace(/\D/g, '');
 }
 
 /**
- * Resolve personal DM jid for whoever reacted.
+ * Only allow bot owner / session owner to unlock view-once by reacting.
+ * Returns their personal DM jid, or null if the reactor is not the owner.
  */
-function resolveReactionTargetDm(fromMe, reactorKey, botConfig, targetKey) {
+function resolveOwnerReactionDm(fromMe, reactorKey, botConfig) {
   let resolveSessionOwnerJid = null;
   try {
     resolveSessionOwnerJid = require('../lib/sessionManager').resolveSessionOwnerJid;
@@ -430,53 +440,78 @@ function resolveReactionTargetDm(fromMe, reactorKey, botConfig, targetKey) {
         : `${String(botConfig.ownerJid).replace(/\D/g, '')}@s.whatsapp.net`)
     : primaryOwnerJid;
 
-  // Bot / linked-device reaction → owner DM
+  // Reaction from the bot's own linked device
   if (fromMe && sessionOwnerJid) return sessionOwnerJid;
 
-  // Prefer participant (group reactors)
-  const candidates = [
-    reactorKey?.participant,
-    reactorKey?.remoteJid,
-    // Some Baileys builds put reactor on the reaction object only
-    typeof reactorKey === 'string' ? reactorKey : null,
-  ].filter(Boolean);
+  const reactorJid =
+    reactorKey?.participant ||
+    (reactorKey?.remoteJid && !String(reactorKey.remoteJid).endsWith('@g.us')
+      ? reactorKey.remoteJid
+      : null);
 
-  for (const jid of candidates) {
-    if (!isUserJid(jid)) continue;
-    if (typeof resolveSessionOwnerJid === 'function') {
-      const hit = resolveSessionOwnerJid(jid);
-      if (hit) return hit;
-    }
-    return jid;
+  if (!reactorJid) return null;
+
+  // Secondary paired session owner
+  if (typeof resolveSessionOwnerJid === 'function') {
+    const hit = resolveSessionOwnerJid(reactorJid);
+    if (hit) return hit;
   }
 
-  // If reaction happened in a 1:1 chat, the chat jid IS the other user
-  const chatJid = targetKey?.remoteJid;
-  if (isUserJid(chatJid) && !fromMe) return chatJid;
+  // Primary owner (match phone digits)
+  if (primaryOwnerJid) {
+    const a = digitsOnly(reactorJid);
+    const b = digitsOnly(primaryOwnerJid);
+    if (a && b && a === b) return primaryOwnerJid;
+  }
+
+  if (sessionOwnerJid) {
+    const a = digitsOnly(reactorJid);
+    const b = digitsOnly(sessionOwnerJid);
+    if (a && b && a === b) return sessionOwnerJid;
+  }
 
   return null;
 }
 
 /**
- * Find cached message by id (exact) or fuzzy match on id suffix.
+ * Find cached message by id, with fuzzy fallback.
  */
 function findCachedMessage(msgId, remoteJid) {
   if (!msgId) return null;
-  if (msgCache.has(msgId)) return msgCache.get(msgId);
+  if (msgCache.has(msgId)) {
+    const entry = msgCache.get(msgId);
+    return { id: entry.keyId || msgId, entry };
+  }
+  if (remoteJid && msgCache.has(`${remoteJid}|${msgId}`)) {
+    const entry = msgCache.get(`${remoteJid}|${msgId}`);
+    return { id: entry.keyId || msgId, entry };
+  }
 
-  // Fuzzy: some clients use different id prefixes
   for (const [id, entry] of msgCache.entries()) {
-    if (id === msgId) return entry;
-    if (id.endsWith(msgId) || msgId.endsWith(id)) {
-      if (!remoteJid || entry.jid === remoteJid) return entry;
+    const realId = entry.keyId || id;
+    if (realId === msgId || id === msgId) return { id: realId, entry };
+    if ((realId.length > 8 && msgId.length > 8) && (realId.includes(msgId) || msgId.includes(realId))) {
+      if (!remoteJid || !entry.jid || entry.jid === remoteJid) return { id: realId, entry };
     }
   }
+
+  // Last resort: most recent view-once in the same chat
+  if (remoteJid) {
+    let best = null;
+    for (const [id, entry] of msgCache.entries()) {
+      if (entry.jid !== remoteJid || !entry.isViewOnce) continue;
+      const realId = entry.keyId || id;
+      if (!best || entry.ts > best.entry.ts) best = { id: realId, entry };
+    }
+    if (best) return best;
+  }
+
   return null;
 }
 
 /**
- * When ANY user reacts to a view-once message, unlock the media and
- * send it to that user's personal DM (not the group chat).
+ * Owner reacts to a view-once → unlock and send to owner's personal DM only.
+ * Other users' reactions are ignored completely.
  */
 async function handleViewOnceReaction(sock, reactionUpdate, botConfig, upsertMessage) {
   try {
@@ -492,37 +527,41 @@ async function handleViewOnceReaction(sock, reactionUpdate, botConfig, upsertMes
 
       const { targetKey, reactorKey, text, fromMe } = norm;
 
-      // Empty text = reaction removed
       if (!text || !text.trim()) {
-        console.log('[viewOnce reaction] skip: empty reaction (removed)');
+        console.log('[viewOnce reaction] skip: reaction removed');
         continue;
       }
       if (!targetKey?.id) {
-        console.log('[viewOnce reaction] skip: no target message id', JSON.stringify(item || upsertMessage?.key || {}).slice(0, 300));
+        console.log('[viewOnce reaction] skip: no target id');
         continue;
       }
 
-      const targetDm = resolveReactionTargetDm(fromMe, reactorKey, botConfig, targetKey);
+      // OWNER ONLY — never DM random group members
+      const targetDm = resolveOwnerReactionDm(fromMe, reactorKey, botConfig);
       if (!targetDm) {
         console.log(
-          `[viewOnce reaction] skip: could not resolve reactor DM | fromMe=${fromMe}` +
-          ` reactorKey=${JSON.stringify(reactorKey || {}).slice(0, 200)}`
+          `[viewOnce reaction] skip: not owner | fromMe=${fromMe}` +
+          ` reactor=${reactorKey?.participant || reactorKey?.remoteJid || '?'}`
         );
         continue;
       }
 
-      const cached = findCachedMessage(targetKey.id, targetKey.remoteJid);
-      if (!cached) {
-        console.log(`[viewOnce reaction] skip: message ${targetKey.id} not in cache (cache size=${msgCache.size})`);
-        // Best-effort: tell the reactor we need the bot online when VO was sent
+      const found = findCachedMessage(targetKey.id, targetKey.remoteJid);
+      if (!found) {
+        console.log(
+          `[viewOnce reaction] cache miss id=${targetKey.id} jid=${targetKey.remoteJid} size=${msgCache.size}`
+        );
+        // Only notify the owner (never other users)
         await sock.sendMessage(targetDm, {
           text:
             '👁️ *View once*\n\n' +
-            'I could not find that message in my cache.\n' +
-            '_I must be in the chat and online when the view-once is sent, then react again._'
+            'I do not have that message cached yet.\n\n' +
+            '_Make sure the bot is in the group and online when the view-once is sent, then react again._'
         }).catch(() => {});
         continue;
       }
+
+      const { entry: cached } = found;
 
       const looksViewOnce =
         cached.isViewOnce ||
@@ -534,42 +573,34 @@ async function handleViewOnceReaction(sock, reactionUpdate, botConfig, upsertMes
         cached.rawMessage?.message?.audioMessage?.viewOnce ||
         cached.rawMessage?.viewOnceMessage ||
         cached.rawMessage?.viewOnceMessageV2 ||
-        cached.rawMessage?.imageMessage?.viewOnce;
+        cached.rawMessage?.imageMessage?.viewOnce ||
+        cached.rawMessage?.videoMessage?.viewOnce;
 
       if (!looksViewOnce) {
-        console.log(`[viewOnce reaction] skip: ${targetKey.id} not view-once (type=${cached.mediaType})`);
+        console.log(`[viewOnce reaction] skip: not view-once type=${cached.mediaType}`);
         continue;
       }
 
-      const synthetic = messageFromCache(cached, targetKey.id);
-      if (!synthetic) {
-        console.log('[viewOnce reaction] skip: could not rebuild message from cache');
-        continue;
-      }
+      const synthetic = messageFromCache(cached, found.id || targetKey.id);
+      if (!synthetic) continue;
 
       const sourceLabel = cached.jid?.endsWith('@g.us') ? 'group' : 'chat';
-      console.log(`[viewOnce reaction] unlocking ${targetKey.id} → ${targetDm} (react=${text})`);
+      console.log(`[viewOnce reaction] owner unlock ${found.id} → ${targetDm}`);
 
       try {
         const ok = await revealViewOnceToChat(sock, synthetic, targetDm, {
           allowQuotedMedia: true,
-          forceMedia: true, // cached entry already verified as view-once
-          caption:
-            `👁️ *View once unlocked*\n` +
-            `React: ${text}\n` +
-            `From: ${sourceLabel}`,
+          forceMedia: true,
+          caption: `👁️ *View once unlocked*\nReact: ${text}\nFrom: ${sourceLabel}`,
           force: true,
         });
         if (!ok) {
-          console.warn('[viewOnce reaction] reveal returned false');
           await sock.sendMessage(targetDm, {
             text: '❌ Could not unlock that view-once (media may have expired).',
           }).catch(() => {});
-        } else {
-          console.log(`[viewOnce reaction] OK → sent to ${targetDm}`);
         }
       } catch (err) {
-        console.error('[viewOnce reaction] reveal error:', err.message);
+        console.error('[viewOnce reaction] error:', err.message);
         await sock.sendMessage(targetDm, {
           text: `❌ View-once unlock failed: ${String(err.message || err).slice(0, 200)}`,
         }).catch(() => {});

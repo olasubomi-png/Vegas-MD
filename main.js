@@ -839,6 +839,16 @@ function attachHandlers(sock, saveCreds) {
       // NOTE: do NOT `return` here — that would abort the entire process()
       // callback and skip messages.delete / group-participants.update that
       // may be in the same event batch.
+      // Always cache messages (including non-notify) so view-once / anti-delete work.
+      // Full command processing still only runs for type === 'notify'.
+      for (const message of messages) {
+        if (message?.message && !message.message.protocolMessage) {
+          try { cacheMessage(message); } catch (e) {
+            console.warn('[WA] cacheMessage failed:', e.message);
+          }
+        }
+      }
+
       if (type !== 'notify') {
         console.log(`[WA] skipping non-notify upsert (type: ${type})`);
       } else {
@@ -853,7 +863,7 @@ function attachHandlers(sock, saveCreds) {
           const jid    = message.key.remoteJid;
           const sender = message.key.participant || jid;
 
-          cacheMessage(message);
+          // already cached above
 
           // ── Reaction via messages.upsert (fallback path) ──────────
           // Baileys also delivers reactions as reactionMessage content.
